@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PlaceholderGenerator } from '../utils/PlaceholderGenerator';
@@ -28,7 +29,7 @@ export class Resources {
     public loadDefaultPlaceholders() {
         // Models
         // Load the GLB model
-        this.loadModel('wood_block_321', '/models/blocks/wood_block_321.glb');
+        this.loadModel('wood_block_321', import.meta.env.BASE_URL + 'models/blocks/wood_block_321.glb');
 
         // Textures
         this.textures.set('default_grid', PlaceholderGenerator.createCheckerTexture('#cccccc', '#ffffff'));
