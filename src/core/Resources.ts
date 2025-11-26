@@ -30,6 +30,7 @@ export class Resources {
         // Models
         // Load the GLB model
         this.loadModel('wood_block_321', import.meta.env.BASE_URL + 'models/blocks/wood_block_321.glb');
+        this.loadModel('spikes', import.meta.env.BASE_URL + 'models/traps/spikes.glb');
 
         // Textures
         this.textures.set('default_grid', PlaceholderGenerator.createCheckerTexture('#cccccc', '#ffffff'));

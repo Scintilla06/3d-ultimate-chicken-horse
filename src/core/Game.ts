@@ -425,9 +425,12 @@ export class Game {
         }
     }
 
-    private getItemYShift(_itemId: string): number {
+    private getItemYShift(itemId: string): number {
         // All items are now placed at their correct visual position (surface or center)
         // by the mousemove logic. No additional shift needed.
+        if (itemId === 'spikes') {
+            return -0.25; // Shift down to sit on floor (assuming height 0.5)
+        }
         return 0;
     }
 
@@ -440,6 +443,8 @@ export class Game {
             } else {
                 return new THREE.Vector3(2, 1, 3);
             }
+        } else if (itemId === 'spikes') {
+            return new THREE.Vector3(1, 1, 1);
         }
         return new THREE.Vector3(1, 1, 1);
     }
@@ -695,6 +700,10 @@ export class Game {
             } else {
                 halfExtents.set(0.95, 0.45, 1.45);
             }
+        } else if (itemId === 'spikes') {
+            // Spikes are shorter (0.5 height), so we reduce the check box
+            // Use 0.24 to avoid floating point overlap with floor at y=0
+            halfExtents.set(0.45, 0.24, 0.45);
         }
         
         const placeAABB = new CANNON.AABB({
@@ -713,6 +722,21 @@ export class Game {
         // 2. Check Support (Raycast)
         // Wood blocks can be placed in air
         if (itemId === 'wood_block_321') return true;
+
+        if (itemId === 'spikes') {
+            // Check if there is a body directly below
+            // Raycast down from center
+            const start = new CANNON.Vec3(position.x, position.y, position.z);
+            const end = new CANNON.Vec3(position.x, position.y - 1.0, position.z);
+            
+            const result = new CANNON.RaycastResult();
+            this.physicsWorld.world.raycastClosest(start, end, {
+                collisionFilterMask: -1,
+                skipBackfaces: true
+            }, result);
+            
+            return result.hasHit;
+        }
 
         return false;
     }
@@ -992,6 +1016,24 @@ export class Game {
             } else {
                 shape = new CANNON.Box(new CANNON.Vec3(1.0, 0.5, 1.5));
             }
+        } else if (itemId === 'spikes') {
+            mesh = this.resources.models.get('spikes')?.clone();
+            // Spikes: 1x1 base, height approx 0.5?
+            // Let's use a box that is slightly smaller than 1x1 to avoid clipping issues
+            // Half extents: 0.45, 0.25, 0.45 -> Size 0.9, 0.5, 0.9
+            shape = new CANNON.Box(new CANNON.Vec3(0.45, 0.25, 0.45));
+            tag = 'trap';
+            // Adjust mesh position: The model might be centered.
+            // If we want it to sit on the floor, and position.y is center of grid cell (e.g. 0.5, 1.5)
+            // We might need to lower it if the model origin is at the bottom.
+            // But let's assume standard center origin for now.
+            // If the spikes are short, we might want to lower the body center.
+            // Grid cell center y=0.5. Floor is y=0.
+            // If body height is 0.5 (half 0.25), body center should be at y=0.25.
+            // So we might need to offset the body relative to the grid position.
+            // But placeObject uses mesh.position as base.
+            // Let's adjust mesh.position.y in the logic below if needed.
+            // Actually, let's just let it float at center for now, or adjust bodyY.
         }
 
         if (mesh) {
@@ -1374,7 +1416,7 @@ export class Game {
     }
 
     private generatePartyBoxItems() {
-        const allItems = ['wood_block_321'];
+        const allItems = ['wood_block_321', 'spikes'];
         const numItems = this.lobbyPlayers.length + 2;
         const selectedItems: any[] = [];
         const boxPos = new THREE.Vector3(-100, 0, 0);
