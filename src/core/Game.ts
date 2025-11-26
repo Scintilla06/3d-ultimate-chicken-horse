@@ -383,13 +383,8 @@ export class Game {
 
         // Remote players are kinematic or just visual updates?
         // For simplicity, we'll make them kinematic bodies controlled by snapshots
-        const playerBody = new CANNON.Body({
-            mass: 0, // Kinematic/Static
-            type: CANNON.Body.KINEMATIC,
-            position: new CANNON.Vec3(0, 5, 0)
-        });
-        const sphereShape = new CANNON.Sphere(0.4);
-        playerBody.addShape(sphereShape, new CANNON.Vec3(0, 0.4, 0));
+        const playerBody = BodyFactory.createPlayerBody(0.4, 1.2, 0, new CANNON.Vec3(0, 5, 0));
+        playerBody.type = CANNON.Body.KINEMATIC;
         
         // No collision with local player to avoid lag issues? 
         // Or keep collision? Let's keep collision but make it soft?
@@ -1188,16 +1183,15 @@ export class Game {
         const playerGroup = this.resources.models.get('chicken')?.clone() || new THREE.Group();
         this.scene.add(playerGroup);
 
-        // Use Sphere for smoother movement on blocks
-        const playerBody = new CANNON.Body({
-            mass: 1,
-            material: this.physicsWorld.playerMaterial,
-            fixedRotation: true,
-            position: new CANNON.Vec3(0, 5, 0)
-        });
-        const sphereShape = new CANNON.Sphere(0.4);
-        playerBody.addShape(sphereShape, new CANNON.Vec3(0, 0.4, 0)); // Offset to keep pivot at bottom
-        playerBody.updateMassProperties();
+        // Use Capsule (Two Spheres) for better collision (Head + Feet)
+        // Radius 0.4, Height 1.2 (approx character height)
+        const playerBody = BodyFactory.createPlayerBody(
+            0.4, 
+            1.2, 
+            1, 
+            new CANNON.Vec3(0, 5, 0), 
+            this.physicsWorld.playerMaterial
+        );
         (playerBody as any).userData = { tag: 'player' };
         this.physicsWorld.world.addBody(playerBody);
 

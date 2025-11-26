@@ -53,40 +53,39 @@ export class Player extends Character {
         super.update();
     }
 
+    private getWallContact(direction: THREE.Vector3): CANNON.Vec3 | null {
+        if (!this.body.world) return null;
+        
+        const radius = 0.4;
+        const checkDist = radius + 0.2; // Slightly more than radius
+        
+        // Check at feet, center, head
+        const heights = [0.2, 0.6, 1.0];
+        const vec = new CANNON.Vec3(direction.x * checkDist, 0, direction.z * checkDist);
+        
+        for (const h of heights) {
+            const start = this.body.position.clone();
+            start.y += h;
+            const end = start.vadd(vec);
+            
+            const result = new CANNON.RaycastResult();
+            this.body.world.raycastClosest(start, end, {
+                collisionFilterMask: -1,
+                skipBackfaces: true
+            }, result);
+            
+            if (result.hasHit && result.body !== this.body) {
+                return result.hitNormalWorld;
+            }
+        }
+        return null;
+    }
+
     public setInput(input: { x: number, y: number, jump: boolean, sprint: boolean }, cameraAngleY: number) {
         if (this.isDead || this.hasWon) return;
 
         const grounded = this.canJump();
         
-        // --- Wall Climbing ---
-        // Removed as per request
-        /*
-        // Calculate move direction for wall check
-        let moveDir = new THREE.Vector3(0, 0, 0);
-        if (Math.abs(input.x) > 0.1 || Math.abs(input.y) > 0.1) {
-             const inputAngle = Math.atan2(input.x, input.y);
-             const targetRotation = cameraAngleY + inputAngle;
-             moveDir.set(Math.sin(targetRotation), 0, Math.cos(targetRotation));
-        }
-        
-        const wallContact = this.checkWallInDirection(moveDir);
-
-        if (wallContact && input.y > 0.1) {
-            // Climb Up
-            const climbSpeed = 5;
-            this.body.velocity.y = climbSpeed;
-            
-            // Keep pushing against the wall slightly to maintain contact
-            // This is crucial to prevent the physics engine from pushing the player away
-            // and breaking the wall contact check in the next frame.
-            this.body.velocity.x = moveDir.x * 2; 
-            this.body.velocity.z = moveDir.z * 2;
-            
-            this.isJumping = false;
-            return; // Skip normal movement
-        }
-        */
-
         // --- Movement ---
 
         if (grounded) {
@@ -118,8 +117,22 @@ export class Player extends Character {
                 const inputAngle = Math.atan2(input.x, input.y); 
                 const targetRotation = cameraAngleY + inputAngle;
 
-                const vx = Math.sin(targetRotation) * speed;
-                const vz = Math.cos(targetRotation) * speed;
+                let vx = Math.sin(targetRotation) * speed;
+                let vz = Math.cos(targetRotation) * speed;
+
+                // Wall Slide Logic: Prevent pushing into walls
+                const moveDir = new THREE.Vector3(vx, 0, vz).normalize();
+                const wallNormal = this.getWallContact(moveDir);
+                
+                if (wallNormal) {
+                    // Project velocity along wall to slide
+                    // V_new = V - (V . N) * N
+                    const dot = vx * wallNormal.x + vz * wallNormal.z;
+                    if (dot < 0) { // Only if moving INTO the wall
+                        vx -= dot * wallNormal.x;
+                        vz -= dot * wallNormal.z;
+                    }
+                }
 
                 // Smooth air control
                 const lerp = 0.1;
