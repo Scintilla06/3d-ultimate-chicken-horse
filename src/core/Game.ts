@@ -17,6 +17,7 @@ import { CharacterRig } from "../objects/character/CharacterRig";
 import { getCharacterAppearance } from "../objects/character/CharacterRegistry";
 import { BodyFactory } from "../physics/BodyFactory";
 import { PlaceholderGenerator } from "../utils/PlaceholderGenerator";
+import { Crossbow } from "../objects/traps/Crossbow";
 
 export enum GameState {
   TITLE,
@@ -41,6 +42,7 @@ export class Game {
   private uiManager: UIManager;
   private inputManager: InputManager;
   private players: Map<string, Player> = new Map();
+  private crossbows: Crossbow[] = [];
 
   // Multiplayer
   private lobbyPlayers: PlayerInfo[] = [];
@@ -785,6 +787,8 @@ export class Game {
       // Spikes are shorter (0.5 height), so we reduce the check box
       // Use 0.24 to avoid floating point overlap with floor at y=0
       halfExtents.set(0.45, 0.24, 0.45);
+    } else if (itemId === "crossbow") {
+      halfExtents.set(0.45, 0.45, 0.45);
     }
 
     const placeAABB = new CANNON.AABB({
@@ -810,7 +814,7 @@ export class Game {
 
     // 2. Check Support (Raycast)
     // Wood blocks can be placed in air
-    if (itemId === "wood_block_321") return true;
+    if (itemId === "wood_block_321" || itemId === "crossbow") return true;
 
     if (itemId === "spikes") {
       // Check if there is a body directly below
@@ -1101,6 +1105,10 @@ export class Game {
   }
 
   private clearLevel() {
+    // Cleanup crossbows
+    this.crossbows.forEach((c) => c.cleanup());
+    this.crossbows = [];
+
     const objectsToRemove: CANNON.Body[] = [];
     this.physicsWorld.world.bodies.forEach((b) => {
       const tag = (b as any).userData?.tag;
@@ -1162,6 +1170,10 @@ export class Game {
       // But placeObject uses mesh.position as base.
       // Let's adjust mesh.position.y in the logic below if needed.
       // Actually, let's just let it float at center for now, or adjust bodyY.
+    } else if (itemId === "crossbow") {
+      mesh = this.resources.models.get("crossbow")?.clone();
+      shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+      tag = "block";
     }
 
     if (mesh) {
@@ -1191,6 +1203,11 @@ export class Game {
 
       body = new CANNON.Body({ mass: mass });
 
+      // For directional items like Crossbow, we must sync body rotation
+      if (itemId === "crossbow") {
+        body.quaternion.set(q.x, q.y, q.z, q.w);
+      }
+
       // Calculate Body Position
       // If patch, Body center should be at Visual + halfHeight
       let bodyY = mesh.position.y;
@@ -1216,6 +1233,20 @@ export class Game {
 
       this.scene.add(mesh);
       this.physicsWorld.world.addBody(body);
+
+      if (itemId === "crossbow") {
+        const arrowModel = this.resources.models.get("arrow");
+        if (arrowModel) {
+          const crossbow = new Crossbow(
+            mesh,
+            body,
+            arrowModel,
+            this.scene,
+            this.physicsWorld.world
+          );
+          this.crossbows.push(crossbow);
+        }
+      }
     }
   }
 
@@ -1412,6 +1443,11 @@ export class Game {
 
   private update() {
     this.physicsWorld.step(1 / 60);
+
+    // Update Crossbows
+    this.crossbows.forEach((crossbow) => {
+      crossbow.update(1 / 60);
+    });
 
     // Sync Players FIRST (so rig is at correct position for camera)
     this.players.forEach((player) => {
@@ -1648,7 +1684,7 @@ export class Game {
   }
 
   private generatePartyBoxItems() {
-    const allItems = ["wood_block_321", "spikes"];
+    const allItems = ["wood_block_321", "spikes", "crossbow"];
     const numItems = this.lobbyPlayers.length + 2;
     const selectedItems: any[] = [];
     // 与 init 中 Party Box 所在位置保持一致

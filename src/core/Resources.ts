@@ -37,6 +37,22 @@ export class Resources {
         "spikes",
         import.meta.env.BASE_URL + "models/traps/spikes.glb"
       );
+      this.loadModel(
+        "crossbow",
+        import.meta.env.BASE_URL + "models/traps/bow.glb",
+        (scene) => {
+          // Rotate 90 degrees around Y to face +Z (assuming original faces -X)
+          scene.rotation.y = Math.PI / 2;
+        }
+      );
+      this.loadModel(
+        "arrow",
+        import.meta.env.BASE_URL + "models/traps/arrrow.glb",
+        (scene) => {
+          // Rotate 90 degrees around Y to face +Z (assuming original faces -X)
+          scene.rotation.y = Math.PI / 2;
+        }
+      );
 
       // TODO: replace these simple placeholder characters with real rigged models
       // e.g. this.loadModel('chicken', import.meta.env.BASE_URL + 'models/characters/chicken_rigged.glb')
@@ -53,9 +69,16 @@ export class Resources {
       this.sounds.set("death", emptyBuffer);
     }
 
-    public loadModel(name: string, path: string): void {
+    public loadModel(
+        name: string,
+        path: string,
+        onLoaded?: (scene: THREE.Group) => void
+    ): void {
         this.gltfLoader.load(path, (gltf) => {
             convertToToon(gltf.scene);
+            if (onLoaded) {
+                onLoaded(gltf.scene);
+            }
             this.models.set(name, gltf.scene);
         });
     }
