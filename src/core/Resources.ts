@@ -27,18 +27,30 @@ export class Resources {
 
     // 加载所有默认的占位符资源
     public loadDefaultPlaceholders() {
-        // Models
-        // Load the GLB model
-        this.loadModel('wood_block_321', import.meta.env.BASE_URL + 'models/blocks/wood_block_321.glb');
-        this.loadModel('spikes', import.meta.env.BASE_URL + 'models/traps/spikes.glb');
+      // Models
+      // Blocks / traps
+      this.loadModel(
+        "wood_block_321",
+        import.meta.env.BASE_URL + "models/blocks/wood_block_321.glb"
+      );
+      this.loadModel(
+        "spikes",
+        import.meta.env.BASE_URL + "models/traps/spikes.glb"
+      );
 
-        // Textures
-        this.textures.set('default_grid', PlaceholderGenerator.createCheckerTexture('#cccccc', '#ffffff'));
-        
-        // Sounds (Empty buffers)
-        const emptyBuffer = new AudioBuffer({ length: 1, sampleRate: 44100 });
-        this.sounds.set('jump', emptyBuffer);
-        this.sounds.set('death', emptyBuffer);
+      // TODO: replace these simple placeholder characters with real rigged models
+      // e.g. this.loadModel('chicken', import.meta.env.BASE_URL + 'models/characters/chicken_rigged.glb')
+
+      // Textures
+      this.textures.set(
+        "default_grid",
+        PlaceholderGenerator.createCheckerTexture("#cccccc", "#ffffff")
+      );
+
+      // Sounds (Empty buffers)
+      const emptyBuffer = new AudioBuffer({ length: 1, sampleRate: 44100 });
+      this.sounds.set("jump", emptyBuffer);
+      this.sounds.set("death", emptyBuffer);
     }
 
     public loadModel(name: string, path: string): void {

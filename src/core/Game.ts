@@ -1,26 +1,33 @@
-import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
-import { PhysicsWorld } from '../physics/PhysicsWorld';
-import { NetworkManager } from '../network/NetworkManager';
-import { Packet, PacketType, PlayerInfo, SnapshotPayload } from '../network/Protocol';
-import { Resources } from './Resources';
-import { Loop } from './Loop';
-import { UIManager } from '../ui/UIManager';
-import { InputManager } from './InputManager';
-import { Player } from '../objects/Player';
-import { BodyFactory } from '../physics/BodyFactory';
-import { PlaceholderGenerator } from '../utils/PlaceholderGenerator';
+import * as THREE from "three";
+import * as CANNON from "cannon-es";
+import { PhysicsWorld } from "../physics/PhysicsWorld";
+import { NetworkManager } from "../network/NetworkManager";
+import {
+  Packet,
+  PacketType,
+  PlayerInfo,
+  SnapshotPayload,
+} from "../network/Protocol";
+import { Resources } from "./Resources";
+import { Loop } from "./Loop";
+import { UIManager } from "../ui/UIManager";
+import { InputManager } from "./InputManager";
+import { Player } from "../objects/Player";
+import { CharacterRig } from "../objects/character/CharacterRig";
+import { getCharacterAppearance } from "../objects/character/CharacterRegistry";
+import { BodyFactory } from "../physics/BodyFactory";
+import { PlaceholderGenerator } from "../utils/PlaceholderGenerator";
 
 export enum GameState {
-    TITLE,
-    LOBBY,
-    PICK,
-    BUILD_VIEW,
-    BUILD_PLACE,
-    COUNTDOWN,
-    RUN,
-    SCORE,
-    GAME_OVER
+  TITLE,
+  LOBBY,
+  PICK,
+  BUILD_VIEW,
+  BUILD_PLACE,
+  COUNTDOWN,
+  RUN,
+  SCORE,
+  GAME_OVER,
 }
 
 export class Game {
@@ -141,42 +148,7 @@ export class Game {
     // Load resources
     this.resources.loadDefaultPlaceholders();
 
-    // Wait for resources to load before initializing
     this.resources.onReady(() => {
-      // Ensure character models exist (using placeholders for now if not replaced)
-      ["chicken", "penguin", "robot"].forEach((charId) => {
-        if (!this.resources.models.has(charId)) {
-          const group = new THREE.Group();
-          // Simple placeholder: Sphere + Cone (Beak)
-          const bodyGeo = new THREE.SphereGeometry(0.4, 16, 16);
-          const bodyMat = new THREE.MeshStandardMaterial({
-            color:
-              charId === "chicken"
-                ? 0xffffff
-                : charId === "penguin"
-                ? 0x000000
-                : 0x888888,
-          });
-          const body = new THREE.Mesh(bodyGeo, bodyMat);
-          body.position.y = 0.4;
-          group.add(body);
-
-          const headGeo = new THREE.SphereGeometry(0.25, 16, 16);
-          const head = new THREE.Mesh(headGeo, bodyMat);
-          head.position.y = 0.9;
-          group.add(head);
-
-          const beakGeo = new THREE.ConeGeometry(0.05, 0.1, 8);
-          const beakMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
-          const beak = new THREE.Mesh(beakGeo, beakMat);
-          beak.position.set(0, 0.9, 0.2);
-          beak.rotation.x = Math.PI / 2;
-          group.add(beak);
-
-          this.resources.models.set(charId, group);
-        }
-      });
-
       this.init();
       this.setupEvents();
       this.setupNetworkHandlers();
@@ -416,11 +388,6 @@ export class Game {
     this.lobbyPlayers.forEach((p) => {
       if (p.id !== this.myPlayerInfo.id) {
         this.spawnRemotePlayer(p);
-      } else {
-        // Update local player model if needed
-        // For now, we just assume local is 'local'
-        // But we should probably update the model based on selection
-        this.updateLocalPlayerModel(p.character);
       }
     });
 
@@ -428,9 +395,9 @@ export class Game {
   }
 
   private spawnRemotePlayer(info: PlayerInfo) {
-    const playerGroup =
-      this.resources.models.get(info.character)?.clone() || new THREE.Group();
-    this.scene.add(playerGroup);
+    const appearance = getCharacterAppearance(info.character);
+    const rig = CharacterRig.createFromAppearance(this.resources, appearance);
+    this.scene.add(rig.root);
 
     // Remote players are kinematic or just visual updates?
     // For simplicity, we'll make them kinematic bodies controlled by snapshots
@@ -452,21 +419,8 @@ export class Game {
 
     this.physicsWorld.world.addBody(playerBody);
 
-    const player = new Player(playerGroup, playerBody);
+    const player = new Player(rig, playerBody);
     this.players.set(info.id, player);
-  }
-
-  private updateLocalPlayerModel(charId: string) {
-    const localPlayer = this.players.get("local");
-    if (localPlayer) {
-      // Remove old mesh
-      this.scene.remove(localPlayer.mesh);
-      // Add new mesh
-      const newMesh =
-        this.resources.models.get(charId)?.clone() || new THREE.Group();
-      localPlayer.mesh = newMesh;
-      this.scene.add(newMesh);
-    }
   }
 
   private handleSnapshot(data: SnapshotPayload) {
@@ -482,8 +436,7 @@ export class Game {
         data.rot[3]
       );
       // Update mesh
-      player.mesh.position.copy(player.body.position as any);
-      player.mesh.quaternion.copy(player.body.quaternion as any);
+      player.rig.updateFromBody(player.body);
     }
   }
 
@@ -565,7 +518,7 @@ export class Game {
         this.camera.lookAt(0, 0, 0);
       } else if (
         this.state === GameState.RUN &&
-        this.playersFinishedTurn.has(this.networkManager.getMyId())
+        !this.playersFinishedTurn.has(this.networkManager.getMyId())
       ) {
         // Spectator Free Look (Drag to rotate)
         if (event.buttons === 1 || event.buttons === 2) {
@@ -694,12 +647,12 @@ export class Game {
       }
     });
 
-    window.addEventListener("mousedown", (event) => {
+    window.addEventListener("mousedown", () => {
       // 让 3D UI 在按下时做视觉反馈（不阻止后续 click）
       this.uiManager.handlePointerDown();
     });
 
-    window.addEventListener("click", (event) => {
+    window.addEventListener("click", () => {
       // 优先让 3D UI 处理点击
       const consumed = this.uiManager.handleClick();
       if (consumed) return;
@@ -907,7 +860,7 @@ export class Game {
       // Reset players
       this.players.forEach((player, id) => {
         if (id !== "local") {
-          this.scene.remove(player.mesh);
+          this.scene.remove(player.rig.root);
           this.physicsWorld.world.removeBody(player.body);
         } else {
           // Reset local player position and state
@@ -1091,7 +1044,7 @@ export class Game {
 
       // Show all players again
       this.players.forEach((player) => {
-        player.mesh.visible = true;
+        player.rig.root.visible = true;
       });
 
       // Host calculates and sends scores
@@ -1435,9 +1388,9 @@ export class Game {
     // items.forEach((id) => { ... });
 
     // --- Player ---
-    const playerGroup =
-      this.resources.models.get("chicken")?.clone() || new THREE.Group();
-    this.scene.add(playerGroup);
+    const appearance = getCharacterAppearance("chicken");
+    const rig = CharacterRig.createFromAppearance(this.resources, appearance);
+    this.scene.add(rig.root);
 
     // Use Capsule (Two Spheres) for better collision (Head + Feet)
     // Radius 0.4, Height 1.2 (approx character height)
@@ -1451,7 +1404,7 @@ export class Game {
     (playerBody as any).userData = { tag: "player" };
     this.physicsWorld.world.addBody(playerBody);
 
-    const player = new Player(playerGroup, playerBody);
+    const player = new Player(rig, playerBody);
     this.players.set("local", player);
 
     this.loop.start();
@@ -1510,7 +1463,7 @@ export class Game {
       }
     }
 
-    // Handle Input for Local Player
+    // Handle Input & Camera for Local Player
     if (this.state === GameState.RUN || this.state === GameState.COUNTDOWN) {
       const localPlayer = this.players.get("local");
       if (localPlayer) {
@@ -1577,7 +1530,7 @@ export class Game {
           localPlayer.setInput(input, this.cameraAngleY);
 
           // 3. Update Camera Position (Orbit around player)
-          const targetPos = localPlayer.mesh.position.clone();
+          const targetPos = localPlayer.body.position.clone() as any;
           targetPos.y += 1.5; // Look at head height
 
           const offsetX =
@@ -1686,7 +1639,7 @@ export class Game {
     }
 
     this.players.forEach((player) => {
-      player.update();
+      player.update(1 / 60);
     });
 
     this.renderer.render(this.scene, this.camera);
