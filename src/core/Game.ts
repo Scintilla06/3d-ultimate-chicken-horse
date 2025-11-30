@@ -694,12 +694,12 @@ export class Game {
       }
     });
 
-    window.addEventListener("mousedown", (event) => {
+    window.addEventListener("mousedown", () => {
       // 让 3D UI 在按下时做视觉反馈（不阻止后续 click）
       this.uiManager.handlePointerDown();
     });
 
-    window.addEventListener("click", (event) => {
+    window.addEventListener("click", () => {
       // 优先让 3D UI 处理点击
       const consumed = this.uiManager.handleClick();
       if (consumed) return;

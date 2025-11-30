@@ -10,7 +10,6 @@ export class UIManager {
   private raycaster: THREE.Raycaster | null = null;
   private uiRoot3D: THREE.Group | null = null;
   private pointerNDC: THREE.Vector2 = new THREE.Vector2();
-  private currentHoverButton: THREE.Mesh | null = null;
 
   constructor() {
     this.uiLayer = document.getElementById("ui-layer") as HTMLElement;
@@ -103,7 +102,7 @@ export class UIManager {
 
     this.raycaster.setFromCamera(this.pointerNDC, this.camera as THREE.Camera);
     const intersects = this.raycaster.intersectObjects(
-      this.uiRoot3D.children,
+      this.uiRoot3D!.children,
       true
     );
     if (intersects.length === 0) return false;
@@ -133,7 +132,7 @@ export class UIManager {
 
     this.raycaster.setFromCamera(this.pointerNDC, this.camera as THREE.Camera);
     const intersects = this.raycaster.intersectObjects(
-      this.uiRoot3D.children,
+      this.uiRoot3D!.children,
       true
     );
     if (intersects.length === 0) return false;
@@ -287,7 +286,7 @@ export class UIManager {
         btn.position.y += 0.12;
       }
       btn.position.set(-spacing + index * spacing, 3.4, -9.9);
-      this.uiRoot3D.add(btn);
+      this.uiRoot3D?.add(btn);
     });
 
     // Start / Waiting 区域
@@ -296,7 +295,7 @@ export class UIManager {
         onStart();
       });
       startBtn.position.set(0, 2.3, -9.9);
-      this.uiRoot3D.add(startBtn);
+      this.uiRoot3D?.add(startBtn);
     } else {
       const waitDiv = document.createElement("div");
       waitDiv.className = "ui-wait-msg";
