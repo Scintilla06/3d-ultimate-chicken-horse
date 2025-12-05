@@ -26,7 +26,9 @@ export class Arrow {
 
         // Create Body
         // Arrow shape: Box (Long in Z)
-        const shape = new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.4));
+        // Model scaled 2x, so physics body should be larger
+        // Original: 0.1, 0.1, 0.4 -> New: 0.2, 0.2, 0.8
+        const shape = new CANNON.Box(new CANNON.Vec3(0.2, 0.2, 0.8));
         this.body = new CANNON.Body({
             mass: 1, 
             type: CANNON.Body.KINEMATIC,

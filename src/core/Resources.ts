@@ -54,8 +54,19 @@ export class Resources {
         }
       );
 
-      // TODO: replace these simple placeholder characters with real rigged models
-      // e.g. this.loadModel('chicken', import.meta.env.BASE_URL + 'models/characters/chicken_rigged.glb')
+      this.loadModel(
+        "platform",
+        import.meta.env.BASE_URL + "models/blocks/platform.glb"
+      );
+
+      this.loadModel(
+        "cloud",
+        import.meta.env.BASE_URL + "models/blocks/cloud.glb"
+      );
+
+      // Register procedural character models
+      this.models.set("chicken", PlaceholderGenerator.createChicken());
+      this.models.set("penguin", PlaceholderGenerator.createPenguin());
 
       // Textures
       this.textures.set(

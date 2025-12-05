@@ -53,7 +53,9 @@ export class Crossbow {
         // Spawn position: slightly in front
         const position = new THREE.Vector3();
         position.copy(this.body.position as any);
-        position.add(direction.clone().multiplyScalar(0.6)); 
+        // Model is 2x larger, so we need to spawn arrow further out to avoid clipping
+        // Original offset 0.6 -> New offset 1.2
+        position.add(direction.clone().multiplyScalar(1.2)); 
 
         const arrow = new Arrow(this.arrowModel, position, direction);
         this.scene.add(arrow.mesh);

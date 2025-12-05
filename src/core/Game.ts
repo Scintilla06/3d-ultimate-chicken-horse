@@ -165,6 +165,26 @@ export class Game {
     });
   }
 
+  private updateLocalPlayerModel(characterId: string) {
+    const localPlayer = this.players.get("local");
+    if (!localPlayer) return;
+
+    const appearance = getCharacterAppearance(characterId);
+
+    // Remove old rig
+    this.scene.remove(localPlayer.rig.root);
+
+    // Create new rig
+    const newRig = CharacterRig.createFromAppearance(this.resources, appearance);
+    this.scene.add(newRig.root);
+
+    // Update player
+    localPlayer.rig = newRig;
+
+    // Sync
+    newRig.updateFromBody(localPlayer.body);
+  }
+
   private setupNetworkHandlers() {
     this.networkManager.onIdAssigned = (id) => {
       this.myPlayerInfo.id = id;
@@ -214,11 +234,27 @@ export class Game {
           // Client receives Welcome
           this.lobbyPlayers = packet.p.players;
           this.myPlayerInfo.id = this.networkManager.getMyId();
+
+          // Sync my character
+          const myProfile = this.lobbyPlayers.find(
+            (p) => p.id === this.myPlayerInfo.id
+          );
+          if (myProfile && myProfile.character) {
+            this.updateLocalPlayerModel(myProfile.character);
+          }
+
           this.setState(GameState.LOBBY);
           break;
 
         case PacketType.LOBBY_UPDATE:
           this.lobbyPlayers = packet.p;
+          // Check if my character changed
+          const me = this.lobbyPlayers.find(
+            (p) => p.id === this.networkManager.getMyId()
+          );
+          if (me && me.character) {
+            this.updateLocalPlayerModel(me.character);
+          }
           this.refreshLobbyUI();
           break;
 
@@ -359,6 +395,7 @@ export class Game {
                 (p) => p.id === this.myPlayerInfo.id
               );
               if (me) me.character = charId;
+              this.updateLocalPlayerModel(charId);
               this.broadcastLobbyUpdate();
             }
           } else {
@@ -1172,7 +1209,9 @@ export class Game {
       // Actually, let's just let it float at center for now, or adjust bodyY.
     } else if (itemId === "crossbow") {
       mesh = this.resources.models.get("crossbow")?.clone();
-      shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+      // Crossbow model scaled up 2x (2x2x2)
+      // Half extents: 1.0, 1.0, 1.0
+      shape = new CANNON.Box(new CANNON.Vec3(1.0, 1.0, 1.0));
       tag = "block";
     }
 
@@ -1303,16 +1342,36 @@ export class Game {
     this.scene.fog = new THREE.Fog(0x8fd2ff, 60, 140);
 
     // Clouds
+    const cloudModel = this.resources.models.get("cloud");
     for (let i = 0; i < 15; i++) {
-      const cloud = PlaceholderGenerator.createCloud();
+      let cloud: THREE.Group;
+      if (cloudModel) {
+        cloud = cloudModel.clone();
+      } else {
+        cloud = PlaceholderGenerator.createCloud();
+      }
+
       cloud.position.set(
         (Math.random() - 0.5) * 100,
         -10 + Math.random() * 5, // Below player (y=-10 to -5)
         (Math.random() - 0.5) * 60
       );
+      
+      // Random rotation for variety
       cloud.rotation.y = Math.random() * Math.PI * 2;
-      const scale = 1 + Math.random() * 2;
-      cloud.scale.set(scale, scale, scale);
+      // Slight random tilt
+      cloud.rotation.z = (Math.random() - 0.5) * 0.2;
+
+      // Random scale
+      // Base size is around 3x3x3, we vary it to create different cloud shapes
+      const scale = 0.8 + Math.random() * 1.2;
+      // Non-uniform scaling for more variety
+      cloud.scale.set(
+        scale * (0.8 + Math.random() * 0.4), 
+        scale * (0.8 + Math.random() * 0.4), 
+        scale * (0.8 + Math.random() * 0.4)
+      );
+      
       this.scene.add(cloud);
       this.clouds.push(cloud);
     }
@@ -1345,13 +1404,23 @@ export class Game {
     (startPlatBody as any).userData = { tag: "ground" };
     this.physicsWorld.world.addBody(startPlatBody);
 
-    const startPlatGeo = new THREE.BoxGeometry(10, 2, 10);
-    const startPlatMat = new THREE.MeshStandardMaterial({
-      map: this.resources.textures.get("default_grid"),
-      color: 0x888888,
-    });
-    const startPlatMesh = new THREE.Mesh(startPlatGeo, startPlatMat);
-    startPlatMesh.position.y = -1;
+    const platformModel = this.resources.models.get("platform");
+    let startPlatMesh: THREE.Object3D;
+
+    if (platformModel) {
+      startPlatMesh = platformModel.clone();
+      // Assuming model origin is at center
+      startPlatMesh.position.set(0, -0.35, 0);
+    } else {
+      const startPlatGeo = new THREE.BoxGeometry(10, 2, 10);
+      const startPlatMat = new THREE.MeshStandardMaterial({
+        map: this.resources.textures.get("default_grid"),
+        color: 0x888888,
+      });
+      startPlatMesh = new THREE.Mesh(startPlatGeo, startPlatMat);
+      startPlatMesh.position.y = -1;
+    }
+
     startPlatMesh.receiveShadow = true;
     this.scene.add(startPlatMesh);
     (startPlatBody as any).meshReference = startPlatMesh;
@@ -1369,8 +1438,20 @@ export class Game {
     (goalPlatBody as any).userData = { tag: "ground" };
     this.physicsWorld.world.addBody(goalPlatBody);
 
-    const goalPlatMesh = new THREE.Mesh(startPlatGeo, startPlatMat); // Reuse geo/mat
-    goalPlatMesh.position.set(0, 1, 25);
+    let goalPlatMesh: THREE.Object3D;
+    if (platformModel) {
+      goalPlatMesh = platformModel.clone();
+      goalPlatMesh.position.set(0, 1.65, 25);
+    } else {
+      const goalPlatGeo = new THREE.BoxGeometry(10, 2, 10);
+      const goalPlatMat = new THREE.MeshStandardMaterial({
+        map: this.resources.textures.get("default_grid"),
+        color: 0x888888,
+      });
+      goalPlatMesh = new THREE.Mesh(goalPlatGeo, goalPlatMat);
+      goalPlatMesh.position.set(0, 1, 25);
+    }
+
     goalPlatMesh.receiveShadow = true;
     this.scene.add(goalPlatMesh);
     (goalPlatBody as any).meshReference = goalPlatMesh;

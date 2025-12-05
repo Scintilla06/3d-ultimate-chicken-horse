@@ -81,6 +81,8 @@ export class CharacterRig {
       });
       const body = new THREE.Mesh(bodyGeo, bodyMat);
       body.position.y = 0.5;
+      body.castShadow = true;
+      body.receiveShadow = true;
       root.add(body);
       nodes.body = body;
 
@@ -90,6 +92,8 @@ export class CharacterRig {
       });
       const head = new THREE.Mesh(headGeo, headMat);
       head.position.y = 0.95;
+      head.castShadow = true;
+      head.receiveShadow = true;
       root.add(head);
       nodes.head = head;
 
@@ -100,6 +104,8 @@ export class CharacterRig {
       const beak = new THREE.Mesh(beakGeo, beakMat);
       beak.position.set(0, 0.95, 0.3);
       beak.rotation.x = Math.PI / 2;
+      beak.castShadow = true;
+      beak.receiveShadow = true;
       head.add(beak);
 
       const wingGeo = new THREE.BoxGeometry(0.15, 0.3, 0.4);
@@ -108,11 +114,15 @@ export class CharacterRig {
       });
       const leftWing = new THREE.Mesh(wingGeo, wingMat);
       leftWing.position.set(-0.45, 0.5, 0);
+      leftWing.castShadow = true;
+      leftWing.receiveShadow = true;
       root.add(leftWing);
       nodes.leftWing = leftWing;
 
       const rightWing = leftWing.clone();
       rightWing.position.x = 0.45;
+      // clone copies properties like castShadow? Usually yes, but let's be safe or rely on clone.
+      // Three.js Mesh.clone() copies castShadow/receiveShadow.
       root.add(rightWing);
       nodes.rightWing = rightWing;
 
@@ -122,6 +132,8 @@ export class CharacterRig {
       });
       const leftLeg = new THREE.Mesh(legGeo, legMat);
       leftLeg.position.set(-0.15, 0.1, 0);
+      leftLeg.castShadow = true;
+      leftLeg.receiveShadow = true;
       root.add(leftLeg);
       nodes.leftLeg = leftLeg;
 

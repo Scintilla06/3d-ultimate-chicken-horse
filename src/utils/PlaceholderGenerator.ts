@@ -49,18 +49,131 @@ export class PlaceholderGenerator {
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff }); // White
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.position.y = 0.4;
+    body.name = "Body";
     body.castShadow = true;
     body.receiveShadow = true;
     group.add(body);
+
+    // Head (Chicken head is often just part of body or on top)
+    // Let's make a separate head for rig compatibility
+    const headGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+    const head = new THREE.Mesh(headGeo, bodyMat);
+    head.position.set(0, 1.0, 0);
+    head.name = "Head";
+    head.castShadow = true;
+    head.receiveShadow = true;
+    group.add(head);
 
     // Beak
     const beakGeo = new THREE.ConeGeometry(0.1, 0.2, 4);
     const beakMat = new THREE.MeshStandardMaterial({ color: 0xffa500 }); // Orange
     const beak = new THREE.Mesh(beakGeo, beakMat);
     beak.rotation.x = -Math.PI / 2;
-    beak.position.set(0, 0.6, 0.4);
+    beak.position.set(0, 0, 0.4); // Relative to head
     beak.castShadow = true;
-    group.add(beak);
+    head.add(beak);
+
+    // Wings
+    const wingGeo = new THREE.BoxGeometry(0.1, 0.4, 0.6);
+    const leftWing = new THREE.Mesh(wingGeo, bodyMat);
+    leftWing.position.set(-0.5, 0.4, 0);
+    leftWing.name = "Wing_L";
+    leftWing.castShadow = true;
+    group.add(leftWing);
+
+    const rightWing = new THREE.Mesh(wingGeo, bodyMat);
+    rightWing.position.set(0.5, 0.4, 0);
+    rightWing.name = "Wing_R";
+    rightWing.castShadow = true;
+    group.add(rightWing);
+
+    // Legs
+    const legGeo = new THREE.BoxGeometry(0.1, 0.4, 0.1);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+    const leftLeg = new THREE.Mesh(legGeo, legMat);
+    leftLeg.position.set(-0.2, 0.2, 0);
+    leftLeg.name = "Leg_L";
+    leftLeg.castShadow = true;
+    group.add(leftLeg);
+
+    const rightLeg = new THREE.Mesh(legGeo, legMat);
+    rightLeg.position.set(0.2, 0.2, 0);
+    rightLeg.name = "Leg_R";
+    rightLeg.castShadow = true;
+    group.add(rightLeg);
+
+    return group;
+  }
+
+  static createPenguin(): THREE.Group {
+    const group = new THREE.Group();
+
+    // Body (Black capsule-ish)
+    const bodyGeo = new THREE.CapsuleGeometry(0.4, 0.8, 4, 8);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x222222 }); // Black
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 0.6;
+    body.name = "Body";
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Belly (White patch)
+    const bellyGeo = new THREE.CapsuleGeometry(0.35, 0.7, 4, 8);
+    const bellyMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const belly = new THREE.Mesh(bellyGeo, bellyMat);
+    belly.position.set(0, 0, 0.1); // Slightly forward
+    belly.castShadow = true;
+    body.add(belly);
+
+    // Head (Part of body visually, but separate node for rig)
+    const headGeo = new THREE.SphereGeometry(0.35, 16, 16);
+    const head = new THREE.Mesh(headGeo, bodyMat);
+    head.position.set(0, 1.1, 0);
+    head.name = "Head";
+    head.castShadow = true;
+    head.receiveShadow = true;
+    group.add(head);
+
+    // Beak
+    const beakGeo = new THREE.ConeGeometry(0.08, 0.2, 4);
+    const beakMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+    const beak = new THREE.Mesh(beakGeo, beakMat);
+    beak.rotation.x = -Math.PI / 2;
+    beak.position.set(0, 0, 0.35);
+    beak.castShadow = true;
+    head.add(beak);
+
+    // Wings (Flippers)
+    const wingGeo = new THREE.BoxGeometry(0.1, 0.5, 0.2);
+    const leftWing = new THREE.Mesh(wingGeo, bodyMat);
+    leftWing.position.set(-0.45, 0.7, 0);
+    leftWing.rotation.z = 0.2;
+    leftWing.name = "Wing_L";
+    leftWing.castShadow = true;
+    group.add(leftWing);
+
+    const rightWing = new THREE.Mesh(wingGeo, bodyMat);
+    rightWing.position.set(0.45, 0.7, 0);
+    rightWing.rotation.z = -0.2;
+    rightWing.name = "Wing_R";
+    rightWing.castShadow = true;
+    group.add(rightWing);
+
+    // Legs (Feet)
+    const legGeo = new THREE.BoxGeometry(0.2, 0.1, 0.3);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+    const leftLeg = new THREE.Mesh(legGeo, legMat);
+    leftLeg.position.set(-0.2, 0.05, 0);
+    leftLeg.name = "Leg_L";
+    leftLeg.castShadow = true;
+    group.add(leftLeg);
+
+    const rightLeg = new THREE.Mesh(legGeo, legMat);
+    rightLeg.position.set(0.2, 0.05, 0);
+    rightLeg.name = "Leg_R";
+    rightLeg.castShadow = true;
+    group.add(rightLeg);
 
     return group;
   }
