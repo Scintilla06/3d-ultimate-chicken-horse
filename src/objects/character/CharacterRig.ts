@@ -216,6 +216,8 @@ export class CharacterRig {
         targetAction = this.actions.get("death") || this.actions.get("idle");
       else if (state === "win")
         targetAction = this.actions.get("jump") || this.actions.get("run");
+      else if (state === "dance")
+        targetAction = this.actions.get("dance") || this.actions.get("idle");
 
       // If no specific action found, try to find by state name directly
       if (!targetAction) targetAction = this.actions.get(state);

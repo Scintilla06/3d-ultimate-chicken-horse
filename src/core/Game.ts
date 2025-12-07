@@ -1962,6 +1962,11 @@ export class Game {
                 localPlayer.hasWon ? "GOAL!" : "DIED!"
               );
 
+              // 如果到达终点，播放 dance 动画
+              if (localPlayer.hasWon) {
+                localPlayer.setAnimState("dance");
+              }
+
               // Send Finished Packet immediately
               this.networkManager.send({
                 t: PacketType.PLAYER_FINISHED_RUN,

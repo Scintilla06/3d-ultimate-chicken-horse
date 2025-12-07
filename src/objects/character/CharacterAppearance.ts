@@ -4,7 +4,8 @@ export type CharacterAnimState =
   | "jump"
   | "fall"
   | "dead"
-  | "win";
+  | "win"
+  | "dance";
 
 export interface CharacterAppearance {
   id: string; // e.g. 'chicken', 'horse'

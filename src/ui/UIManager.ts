@@ -423,10 +423,16 @@ export class UIManager {
         let mixer: THREE.AnimationMixer | null = null;
         if (animations && animations.length > 0) {
           mixer = new THREE.AnimationMixer(charModel);
-          // 找到 idle 动画
-          const idleClip = animations.find(a => a.name.toLowerCase().includes('idle'));
-          if (idleClip) {
-            const action = mixer.clipAction(idleClip);
+          // 如果被选中，播放 dance 动画；否则播放 idle
+          let clipToPlay: THREE.AnimationClip | undefined;
+          if (isTaken) {
+            clipToPlay = animations.find(a => a.name.toLowerCase().includes('dance'));
+          }
+          if (!clipToPlay) {
+            clipToPlay = animations.find(a => a.name.toLowerCase().includes('idle'));
+          }
+          if (clipToPlay) {
+            const action = mixer.clipAction(clipToPlay);
             action.play();
           }
         }
