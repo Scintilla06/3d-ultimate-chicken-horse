@@ -411,6 +411,22 @@ export class Game {
           );
           break;
 
+        case PacketType.GAME_WIN:
+          // 客户端收到赢家信息
+          if (this.networkManager.isHostUser()) return;
+          this.uiManager.showWinScreen(
+            packet.p.nickname,
+            packet.p.character,
+            () => {
+              // 客户端返回大厅
+              this.lobbyPlayers.forEach((p) => {
+                (p as any).totalScore = 0;
+              });
+              this.setState(GameState.LOBBY);
+            }
+          );
+          break;
+
         case PacketType.CHAT:
           // 收到聊天消息
           const chatPayload = packet.p as ChatPayload;
@@ -523,9 +539,9 @@ export class Game {
       this.updateLocalPlayerModel(this.myPlayerInfo.character);
     }
 
-    // Spawn all players
+    // Spawn remote players only if they don't already exist
     this.lobbyPlayers.forEach((p) => {
-      if (p.id !== this.myPlayerInfo.id) {
+      if (p.id !== this.myPlayerInfo.id && !this.players.has(p.id)) {
         this.spawnRemotePlayer(p);
       }
     });
@@ -847,12 +863,8 @@ export class Game {
           this.ghostObject.position.copy(this.buildGridPos);
           this.ghostObject.position.y += this.getItemYShift(this.selectedItem);
         }
-        // Update highlight
-        this.gridHighlight.position.set(
-          this.buildGridPos.x,
-          10,
-          this.buildGridPos.z
-        );
+        // Update all laser highlights to follow the item
+        this.updateLaserHighlights();
       }
     });
 
@@ -1329,8 +1341,18 @@ export class Game {
             const winner = scores.find((s) => s.current >= this.GOAL_SCORE);
 
             if (winner) {
+              // 查找赢家的角色信息
+              const winnerPlayer = this.lobbyPlayers.find((p) => p.nickname === winner.nickname);
+              const winnerCharacter = winnerPlayer?.character || "chicken";
+
+              // 广播赢家信息给所有客户端
+              this.networkManager.send({
+                t: PacketType.GAME_WIN,
+                p: { nickname: winner.nickname, character: winnerCharacter },
+              });
+
               // Game Over - Show Win Screen
-              this.uiManager.showWinScreen(winner.nickname, () => {
+              this.uiManager.showWinScreen(winner.nickname, winnerCharacter, () => {
                 // Back to Lobby - Reset scores but keep players
                 this.lobbyPlayers.forEach((p) => {
                   (p as any).totalScore = 0;
@@ -1400,6 +1422,8 @@ export class Game {
       const offsetX = playerCount === 1 ? 0 : (index - (playerCount - 1) / 2) * spacing;
       const offsetZ = (index % 2) * 0.3 - 0.15; // 微小的Z方向错开
       player.resetPosition(new CANNON.Vec3(offsetX, 2, offsetZ));
+      // 立即同步可视模型位置，确保模型不会残留在上一轮结束位置
+      player.rig.updateFromBody(player.body);
       index++;
     });
   }
@@ -1550,26 +1574,26 @@ export class Game {
         // 分类记录每种得分
         const scoreBreakdown: { type: string; points: number; color: string }[] = [];
         
-        // 1. 终点得分: 如果所有人都到达终点，则没有终点得分；否则到达终点的人获得终点得分
+        // 1. Goal points: If not everyone reached the goal, those who did get points
         const reachedGoal = this.finishOrder.includes(p.id);
         if (reachedGoal && !allReachedGoal) {
-          scoreBreakdown.push({ type: "终点", points: GOAL_POINTS, color: "#4CAF50" }); // 绿色
+          scoreBreakdown.push({ type: "Goal", points: GOAL_POINTS, color: "#4CAF50" });
         }
         
-        // 2. 独行得分: 如果恰好一个人到达终点
+        // 2. Solo points: If exactly one person reached the goal
         if (winnersCount === 1 && this.finishOrder[0] === p.id) {
-          scoreBreakdown.push({ type: "独行", points: SOLO_POINTS, color: "#2196F3" }); // 蓝色
+          scoreBreakdown.push({ type: "Solo", points: SOLO_POINTS, color: "#2196F3" });
         }
         
-        // 3. 第一得分: 如果大于一个人到达终点，最早到达的人获得第一得分
+        // 3. First points: If more than one person reached the goal, first one gets bonus
         if (winnersCount > 1 && this.finishOrder[0] === p.id) {
-          scoreBreakdown.push({ type: "第一", points: FIRST_POINTS, color: "#FF9800" }); // 橙色
+          scoreBreakdown.push({ type: "First", points: FIRST_POINTS, color: "#FF9800" });
         }
         
-        // 4. 陷阱得分: 每杀死一人获得分数
+        // 4. Trap points: Points for each kill
         const kills = this.trapKills.get(p.id) || 0;
         if (kills > 0) {
-          scoreBreakdown.push({ type: "陷阱", points: kills * TRAP_KILL_POINTS, color: "#E91E63" }); // 粉红色
+          scoreBreakdown.push({ type: "Trap", points: kills * TRAP_KILL_POINTS, color: "#E91E63" });
         }
 
         // 计算总新增分数

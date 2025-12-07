@@ -53,7 +53,7 @@ export class UIManager {
     this.chatInput = document.createElement("input");
     this.chatInput.type = "text";
     this.chatInput.className = "chat-input";
-    this.chatInput.placeholder = "输入消息...";
+    this.chatInput.placeholder = "Type a message...";
     this.chatInput.maxLength = 200;
 
     this.chatInput.addEventListener("keydown", (e) => {
@@ -765,12 +765,14 @@ export class UIManager {
           )`;
           addedBar.style.border = `2px solid ${scoreItem.color}`;
           addedBar.style.boxSizing = "border-box";
-          addedBar.style.transition = "width 0.6s ease-out";
+          addedBar.style.transition = "width 0.6s ease-out, opacity 0.1s ease-out";
           addedBar.style.zIndex = `${10 - scoreIndex}`;
+          addedBar.style.opacity = "0"; // 初始完全透明，防止边框提前显示
           chartContainer.appendChild(addedBar);
 
-          // 动画展开
+          // 动画展开：先显示再展开
           setTimeout(() => {
+            addedBar.style.opacity = "1";
             addedBar.style.width = `${scoreItem.points * PX_PER_POINT}px`;
           }, animDelay);
 
@@ -794,12 +796,12 @@ export class UIManager {
         typeLabel.innerText = `+ ${type}`;
         typeLabel.style.fontSize = "24px";
         typeLabel.style.fontWeight = "bold";
-        // 根据类型设置颜色
+        // Set color based on type
         const typeColors: { [key: string]: string } = {
-          "终点": "#4CAF50",
-          "独行": "#2196F3", 
-          "第一": "#FF9800",
-          "陷阱": "#E91E63"
+          "Goal": "#4CAF50",
+          "Solo": "#2196F3", 
+          "First": "#FF9800",
+          "Trap": "#E91E63"
         };
         typeLabel.style.color = typeColors[type] || "#333";
         labelContainer.appendChild(typeLabel);
@@ -820,7 +822,11 @@ export class UIManager {
     }, totalAnimTime);
   }
 
-  public showWinScreen(winnerName: string, onBackToLobby: () => void) {
+  // 赢家界面用的3D角色模型和动画混合器
+  private winnerModel: THREE.Group | null = null;
+  private winnerMixer: THREE.AnimationMixer | null = null;
+
+  public showWinScreen(winnerName: string, winnerCharacter: string, onBackToLobby: () => void) {
     this.uiLayer.innerHTML = "";
 
     const container = document.createElement("div");
@@ -829,7 +835,7 @@ export class UIManager {
     container.style.left = "50%";
     container.style.transform = "translate(-50%, -50%)";
     container.style.backgroundColor = "rgba(0, 0, 0, 0.9)";
-    container.style.padding = "60px";
+    container.style.padding = "60px 80px";
     container.style.borderRadius = "15px";
     container.style.color = "white";
     container.style.textAlign = "center";
@@ -837,30 +843,130 @@ export class UIManager {
     container.style.pointerEvents = "auto"; // Enable interaction
 
     const title = document.createElement("h1");
-    title.innerText = "WINNER!";
+    title.innerText = "🏆 WINNER! 🏆";
     title.style.fontSize = "48px";
     title.style.color = "gold";
     title.style.marginBottom = "20px";
+    title.style.textShadow = "2px 2px 4px rgba(0,0,0,0.5)";
     container.appendChild(title);
+
+    // 角色模型容器
+    const modelContainer = document.createElement("div");
+    modelContainer.id = "winner-model-container";
+    modelContainer.style.width = "200px";
+    modelContainer.style.height = "250px";
+    modelContainer.style.margin = "0 auto 20px auto";
+    modelContainer.style.position = "relative";
+    container.appendChild(modelContainer);
 
     const name = document.createElement("h2");
     name.innerText = winnerName;
     name.style.fontSize = "36px";
-    name.style.marginBottom = "40px";
+    name.style.marginBottom = "30px";
+    name.style.color = "#FFD700";
     container.appendChild(name);
 
     const btn = document.createElement("button");
     btn.innerText = "BACK TO LOBBY";
-    btn.style.padding = "15px 30px";
+    btn.style.padding = "15px 40px";
     btn.style.fontSize = "20px";
     btn.style.cursor = "pointer";
     btn.style.backgroundColor = "#4CAF50";
     btn.style.color = "white";
     btn.style.border = "none";
-    btn.style.borderRadius = "5px";
-    btn.onclick = onBackToLobby;
+    btn.style.borderRadius = "8px";
+    btn.style.fontWeight = "bold";
+    btn.style.transition = "background-color 0.2s";
+    btn.onmouseenter = () => { btn.style.backgroundColor = "#45a049"; };
+    btn.onmouseleave = () => { btn.style.backgroundColor = "#4CAF50"; };
+    btn.onclick = () => {
+      this.cleanupWinnerModel();
+      onBackToLobby();
+    };
     container.appendChild(btn);
 
     this.uiLayer.appendChild(container);
+
+    // 创建赢家角色模型展示
+    this.createWinnerCharacterDisplay(winnerCharacter, modelContainer);
+  }
+
+  private createWinnerCharacterDisplay(characterId: string, container: HTMLElement) {
+    if (!this.resources) return;
+
+    // 创建独立的渲染器用于角色展示
+    const width = 200;
+    const height = 250;
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(width, height);
+    renderer.setClearColor(0x000000, 0);
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+    camera.position.set(0, 1.5, 4);
+    camera.lookAt(0, 1, 0);
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffd700, 1.0); // 金色光
+    directionalLight.position.set(2, 3, 2);
+    scene.add(directionalLight);
+
+    // Load character model
+    const originalModel = this.resources.models.get(characterId);
+    if (originalModel) {
+      const charModel = SkeletonUtils.clone(originalModel) as THREE.Group;
+      charModel.position.set(0, 0, 0);
+      charModel.rotation.y = 0; // Face the camera (model default faces +Z, camera is at +Z)
+      scene.add(charModel);
+      this.winnerModel = charModel;
+
+      // Setup animation
+      const animations = this.resources.modelAnimations.get(characterId);
+      if (animations && animations.length > 0) {
+        this.winnerMixer = new THREE.AnimationMixer(charModel);
+        // Try to play dance animation, fallback to idle
+        let danceClip = animations.find(a => a.name.toLowerCase().includes("dance"));
+        if (!danceClip) danceClip = animations.find(a => a.name.toLowerCase().includes("idle"));
+        if (!danceClip) danceClip = animations[0];
+        if (danceClip) {
+          const action = this.winnerMixer.clipAction(danceClip);
+          action.play();
+        }
+      }
+    }
+
+    // Animation loop
+    let rotationAngle = 0;
+    const clock = new THREE.Clock();
+    const animate = () => {
+      if (!container.isConnected) {
+        renderer.dispose();
+        return;
+      }
+      requestAnimationFrame(animate);
+      
+      const delta = clock.getDelta();
+      if (this.winnerMixer) {
+        this.winnerMixer.update(delta);
+      }
+      
+      // Slow rotation for display
+      if (this.winnerModel) {
+        rotationAngle += delta * 0.5;
+        this.winnerModel.rotation.y = Math.sin(rotationAngle) * 0.3;
+      }
+      
+      renderer.render(scene, camera);
+    };
+    animate();
+  }
+
+  private cleanupWinnerModel() {
+    this.winnerModel = null;
+    this.winnerMixer = null;
   }
 }
