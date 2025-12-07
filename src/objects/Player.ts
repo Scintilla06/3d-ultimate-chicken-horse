@@ -232,6 +232,8 @@ export class Player extends Character {
     this.body.quaternion.set(0, 0, 0, 1);
     this.isDead = false;
     this.hasWon = false;
+    this.score = 0; // Reset coin score for new round
+    this.lastHitBy = null; // Reset killer tracking for new round
     this.animState = "idle";
   }
 }

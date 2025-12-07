@@ -47,6 +47,8 @@ export class Game {
   // Multiplayer
   private lobbyPlayers: PlayerInfo[] = [];
   private playersFinishedTurn: Set<string> = new Set();
+  private finishOrder: string[] = []; // Track order of players reaching goal
+  private trapKills: Map<string, number> = new Map(); // Track trap kills per player
   private myPlayerInfo: PlayerInfo = {
     id: "",
     nickname: "Player",
@@ -77,7 +79,7 @@ export class Game {
   // Camera Control
   private cameraAngleY: number = 0; // Horizontal angle (Yaw)
   private cameraAngleX: number = 0.3; // Vertical angle (Pitch)
-  private cameraDistance: number = 10;
+  private cameraDistance: number = 6;
 
   // Camera Tween
   private cameraLerpActive: boolean = false;
@@ -87,6 +89,9 @@ export class Game {
   private cameraLerpDuration: number = 0.8; // seconds
 
   private readonly GOAL_SCORE = 50;
+
+  // Round tracking
+  private currentRound: number = 0;
 
   // Party Box
   private partyBoxRoot: THREE.Group = new THREE.Group();
@@ -304,7 +309,7 @@ export class Game {
 
           this.placeObject(
             packet.p.itemId,
-            new THREE.Vector3(packet.p.pos.x, packet.p.pos.y, packet.p.z),
+            new THREE.Vector3(packet.p.pos.x, packet.p.pos.y, packet.p.pos.z),
             packet.p.rot || 0
           );
           // Track turn using the original sender ID
@@ -339,7 +344,17 @@ export class Game {
             if (senderId === this.networkManager.getMyId()) return;
 
             this.playersFinishedTurn.add(senderId);
-            // Store score/result if needed (packet.p.score)
+            
+            // Track finish order for players who won
+            if (packet.p.won && !this.finishOrder.includes(senderId)) {
+              this.finishOrder.push(senderId);
+            }
+            
+            // Track trap kills
+            if (packet.p.killedBy && packet.p.killedBy !== senderId) {
+              const currentKills = this.trapKills.get(packet.p.killedBy) || 0;
+              this.trapKills.set(packet.p.killedBy, currentKills + 1);
+            }
 
             if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
               // All finished -> Show Score
@@ -554,12 +569,16 @@ export class Game {
       this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
       if (this.state === GameState.BUILD_VIEW) {
-        // Rotate Camera with Mouse X
+        // Rotate Camera around the map center on a circular orbit
         this.buildCameraAngle -= event.movementX * 0.005;
-        const radius = 25;
-        this.camera.position.x = Math.sin(this.buildCameraAngle) * radius;
-        this.camera.position.z = Math.cos(this.buildCameraAngle) * radius;
-        this.camera.lookAt(0, 0, 0);
+        const radius = 30; // Radius for overview
+        const height = 20; // Height above the map
+        const centerX = 0; // Map center X
+        const centerZ = 12.5; // Map center Z (between start z=0 and goal z=25)
+        this.camera.position.x = centerX + Math.sin(this.buildCameraAngle) * radius;
+        this.camera.position.y = height;
+        this.camera.position.z = centerZ + Math.cos(this.buildCameraAngle) * radius;
+        this.camera.lookAt(centerX, 1, centerZ);
       } else if (
         this.state === GameState.RUN &&
         !this.playersFinishedTurn.has(this.networkManager.getMyId())
@@ -896,7 +915,8 @@ export class Game {
       this.uiManager.clearUI();
       document.exitPointerLock();
 
-      // Reset scores
+      // Reset scores and round counter
+      this.currentRound = 0;
       this.lobbyPlayers.forEach((p) => {
         (p as any).totalScore = 0;
       });
@@ -1021,11 +1041,19 @@ export class Game {
         }
       }
 
-      // Side-Top View：恢复为相对适中的建造俯视视角
+      // Side-Top View：相机在地图上方的圆形轨道上
       this.buildCameraAngle = 0;
       this.cameraLerpActive = false;
-      this.camera.position.set(0, 15, 25);
-      this.camera.lookAt(0, 0, 0);
+      const radius = 30;
+      const height = 20;
+      const centerX = 0;
+      const centerZ = 12.5;
+      this.camera.position.set(
+        centerX + Math.sin(this.buildCameraAngle) * radius,
+        height,
+        centerZ + Math.cos(this.buildCameraAngle) * radius
+      );
+      this.camera.lookAt(centerX, 1, centerZ);
     } else if (newState === GameState.BUILD_PLACE) {
       // Keep camera where it was in BUILD_VIEW
       // Enable grid highlight
@@ -1081,49 +1109,56 @@ export class Game {
 
       // 倒计时阶段：同样使用更高的俯视角，保证菜单不被 Start Zone 顶边影响
       this.cameraLerpActive = false;
-      this.camera.position.set(0, 38, -32);
-      this.camera.lookAt(0, 10, 10);
+      this.camera.position.set(0, 25, -15);
+      this.camera.lookAt(0, 1, 12.5);
 
       this.playersFinishedTurn.clear(); // Reuse for RUN finished tracking
     } else if (newState === GameState.SCORE) {
       document.exitPointerLock();
+
+      // Camera stays at goal close-up for a moment before showing scores
+      this.camera.position.set(8, 6, 22);
+      this.camera.lookAt(0, 2, 25);
 
       // Show all players again
       this.players.forEach((player) => {
         player.rig.root.visible = true;
       });
 
-      // Host calculates and sends scores
-      if (this.networkManager.isHostUser()) {
-        const scores = this.calculateScores();
+      // Delay showing the score screen by 2 seconds
+      setTimeout(() => {
+        // Host calculates and sends scores
+        if (this.networkManager.isHostUser()) {
+          const scores = this.calculateScores();
 
-        // Send scores to all clients first
-        this.networkManager.send({
-          t: PacketType.SHOW_SCORE,
-          p: { scores: scores },
-        });
+          // Send scores to all clients first
+          this.networkManager.send({
+            t: PacketType.SHOW_SCORE,
+            p: { scores: scores },
+          });
 
-        // Show locally with callback to check win condition AFTER display
-        this.uiManager.showScoreScreen(scores, this.GOAL_SCORE, () => {
-          // Check Win Condition AFTER the score animation completes
-          const winner = scores.find((s) => s.current >= this.GOAL_SCORE);
+          // Show locally with callback to check win condition AFTER display
+          this.uiManager.showScoreScreen(scores, this.GOAL_SCORE, () => {
+            // Check Win Condition AFTER the score animation completes
+            const winner = scores.find((s) => s.current >= this.GOAL_SCORE);
 
-          if (winner) {
-            // Game Over - Show Win Screen
-            this.uiManager.showWinScreen(winner.nickname, () => {
-              // Back to Lobby - Reset scores but keep players
-              this.lobbyPlayers.forEach((p) => {
-                (p as any).totalScore = 0;
+            if (winner) {
+              // Game Over - Show Win Screen
+              this.uiManager.showWinScreen(winner.nickname, () => {
+                // Back to Lobby - Reset scores but keep players
+                this.lobbyPlayers.forEach((p) => {
+                  (p as any).totalScore = 0;
+                });
+                this.setState(GameState.LOBBY);
               });
-              this.setState(GameState.LOBBY);
-            });
-          } else {
-            // Continue to next round
-            this.networkManager.send({ t: PacketType.START_GAME, p: {} });
-            this.startGame();
-          }
-        });
-      }
+            } else {
+              // Continue to next round
+              this.networkManager.send({ t: PacketType.START_GAME, p: {} });
+              this.startGame();
+            }
+          });
+        }
+      }, 2000);
     }
 
     if (
@@ -1167,8 +1202,13 @@ export class Game {
   }
 
   private resetPlayers() {
+    const playerCount = this.players.size;
+    let index = 0;
     this.players.forEach((player) => {
-      player.resetPosition(new CANNON.Vec3(0, 5, 0));
+      // Spread players horizontally in spawn area
+      const offsetX = (index - (playerCount - 1) / 2) * 1.5; // 1.5 units apart
+      player.resetPosition(new CANNON.Vec3(offsetX, 2, 0));
+      index++;
     });
   }
 
@@ -1296,6 +1336,17 @@ export class Game {
 
   private calculateScores() {
     const results: any[] = [];
+    
+    // Score constants
+    const GOAL_POINTS = 15;      // 终点得分
+    const SOLO_POINTS = 10;      // 独行得分
+    const FIRST_POINTS = 5;      // 第一得分
+    const TRAP_KILL_POINTS = 5;  // 陷阱得分
+    
+    // Count how many players reached goal
+    const winnersCount = this.finishOrder.length;
+    const totalPlayers = this.lobbyPlayers.length;
+    const allReachedGoal = winnersCount === totalPlayers && totalPlayers > 0;
 
     this.lobbyPlayers.forEach((p) => {
       const player =
@@ -1305,17 +1356,28 @@ export class Game {
 
       if (player) {
         let added = 0;
-        if (player.hasWon) added += 10;
-        added += player.score * 2; // Coins
+        
+        // 1. 终点得分: 如果所有人都到达终点，则没有终点得分；否则到达终点的人获得终点得分
+        const reachedGoal = this.finishOrder.includes(p.id);
+        if (reachedGoal && !allReachedGoal) {
+          added += GOAL_POINTS;
+        }
+        
+        // 2. 独行得分: 如果恰好一个人到达终点
+        if (winnersCount === 1 && this.finishOrder[0] === p.id) {
+          added += SOLO_POINTS;
+        }
+        
+        // 3. 第一得分: 如果大于一个人到达终点，最早到达的人获得第一得分
+        if (winnersCount > 1 && this.finishOrder[0] === p.id) {
+          added += FIRST_POINTS;
+        }
+        
+        // 4. 陷阱得分: 每杀死一人获得分数
+        const kills = this.trapKills.get(p.id) || 0;
+        added += kills * TRAP_KILL_POINTS;
 
-        // Update total score (hacky: storing in player object or lobby info?)
-        // Let's store in Player object for now, but Player object is recreated every round?
-        // No, Player object is recreated in startGame.
-        // We need persistent score storage.
-        // Let's add 'score' to PlayerInfo in lobbyPlayers?
-        // But PlayerInfo interface is in Protocol.
-        // For now, let's just use the current round score as 'added' and assume total is tracked elsewhere or just accumulate in PlayerInfo if we modify it.
-        // Let's modify PlayerInfo in memory to hold score.
+        // Update total score
         if (!(p as any).totalScore) (p as any).totalScore = 0;
         (p as any).totalScore += added;
 
@@ -1326,6 +1388,10 @@ export class Game {
         });
       }
     });
+    
+    // Clear round tracking data
+    this.finishOrder = [];
+    this.trapKills.clear();
 
     return results;
   }
@@ -1415,7 +1481,7 @@ export class Game {
     if (platformModel) {
       startPlatMesh = platformModel.clone();
       // Assuming model origin is at center
-      startPlatMesh.position.set(0, -0.35, 0);
+      startPlatMesh.position.set(0, -0.45, 0);
     } else {
       const startPlatGeo = new THREE.BoxGeometry(10, 2, 10);
       const startPlatMat = new THREE.MeshStandardMaterial({
@@ -1446,7 +1512,7 @@ export class Game {
     let goalPlatMesh: THREE.Object3D;
     if (platformModel) {
       goalPlatMesh = platformModel.clone();
-      goalPlatMesh.position.set(0, 1.65, 25);
+      goalPlatMesh.position.set(0, 1.55, 25);
     } else {
       const goalPlatGeo = new THREE.BoxGeometry(10, 2, 10);
       const goalPlatMat = new THREE.MeshStandardMaterial({
@@ -1689,24 +1755,41 @@ export class Game {
                 localPlayer.hasWon ? "GOAL!" : "DIED!"
               );
 
-              // Switch to Spectator View (Unlock mouse)
-              document.exitPointerLock();
-              // Set initial spectator camera pos
-              this.camera.position.set(0, 15, 25);
-              this.camera.lookAt(0, 0, 0);
-
-              // Send Finished Packet
+              // Send Finished Packet immediately
               this.networkManager.send({
                 t: PacketType.PLAYER_FINISHED_RUN,
-                p: { won: localPlayer.hasWon },
+                p: { 
+                  won: localPlayer.hasWon,
+                  killedBy: localPlayer.lastHitBy 
+                },
               });
-
-              // If Host, check if everyone finished (including self)
+              
+              // Track locally for host
               if (this.networkManager.isHostUser()) {
-                if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
-                  this.setState(GameState.SCORE);
+                if (localPlayer.hasWon && !this.finishOrder.includes(this.networkManager.getMyId())) {
+                  this.finishOrder.push(this.networkManager.getMyId());
+                }
+                if (localPlayer.lastHitBy && localPlayer.lastHitBy !== this.networkManager.getMyId()) {
+                  const currentKills = this.trapKills.get(localPlayer.lastHitBy) || 0;
+                  this.trapKills.set(localPlayer.lastHitBy, currentKills + 1);
                 }
               }
+
+              // Delay camera switch by 2 seconds for death animation
+              const delay = localPlayer.hasWon ? 0 : 2000;
+              setTimeout(() => {
+                // Switch to Goal Area Close-up View
+                document.exitPointerLock();
+                this.camera.position.set(8, 6, 22);
+                this.camera.lookAt(0, 2, 25);
+
+                // If Host, check if everyone finished (including self)
+                if (this.networkManager.isHostUser()) {
+                  if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
+                    this.setState(GameState.SCORE);
+                  }
+                }
+              }, delay);
             }
           }
         }
@@ -1776,7 +1859,25 @@ export class Game {
     // 与 init 中 Party Box 所在位置保持一致
     const boxPos = new THREE.Vector3(12, 0, -6);
 
-    for (let i = 0; i < numItems; i++) {
+    // Increment round counter
+    this.currentRound++;
+
+    // First round: ensure at least one wood_block_321
+    let guaranteedBlock = false;
+    if (this.currentRound === 1) {
+      const xOffset = (Math.random() - 0.5) * 10;
+      const zOffset = (Math.random() - 0.5) * 6;
+      const yRot = Math.random() * Math.PI * 2;
+      selectedItems.push({
+        id: "wood_block_321",
+        pos: [boxPos.x + xOffset, boxPos.y + 0.5, boxPos.z + zOffset],
+        rot: yRot,
+      });
+      guaranteedBlock = true;
+    }
+
+    const remainingItems = guaranteedBlock ? numItems - 1 : numItems;
+    for (let i = 0; i < remainingItems; i++) {
       const id = allItems[Math.floor(Math.random() * allItems.length)];
       const xOffset = (Math.random() - 0.5) * 10;
       const zOffset = (Math.random() - 0.5) * 6;
