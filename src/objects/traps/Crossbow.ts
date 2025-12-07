@@ -58,6 +58,7 @@ export class Crossbow {
         position.add(direction.clone().multiplyScalar(1.2)); 
 
         const arrow = new Arrow(this.arrowModel, position, direction);
+        arrow.setWorld(this.world); // 传递 world 引用给箭矢
         this.scene.add(arrow.mesh);
         this.world.addBody(arrow.body);
         this.arrows.push(arrow);

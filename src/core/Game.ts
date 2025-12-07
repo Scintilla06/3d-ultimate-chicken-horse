@@ -7,6 +7,7 @@ import {
   PacketType,
   PlayerInfo,
   SnapshotPayload,
+  ChatPayload,
 } from "../network/Protocol";
 import { Resources } from "./Resources";
 import { Loop } from "./Loop";
@@ -70,6 +71,8 @@ export class Game {
   private buildHeight: number = 0;
   private buildRotation: number = 0; // 0, 1, 2, 3 (* PI/2)
   private gridHighlight: THREE.Mesh;
+  private gridHighlightX: THREE.Mesh; // X方向激光（沿X轴延伸）
+  private gridHighlightZ: THREE.Mesh; // Z方向激光（沿Z轴延伸）
   private gridHelper: THREE.GridHelper;
   private buildCameraAngle: number = 0;
 
@@ -95,6 +98,9 @@ export class Game {
 
   // Party Box
   private partyBoxRoot: THREE.Group = new THREE.Group();
+
+  // Map Root (地图元素容器，用于在LOBBY时隐藏)
+  private mapRoot: THREE.Group = new THREE.Group();
 
   // Environment
   private clouds: THREE.Group[] = [];
@@ -129,18 +135,41 @@ export class Game {
     // 将 3D 场景引用传给 UI 管理器，用于 3D UI 面板
     this.uiManager.attachScene(this.scene, this.camera, this.raycaster);
 
-    // Build Grid Highlight (Column)
+    // Build Grid Highlight (Column - Y axis - thin laser)
     this.gridHighlight = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 20, 1), // Tall column
+      new THREE.BoxGeometry(0.1, 100, 0.1),
       new THREE.MeshBasicMaterial({
         color: 0x00ff00,
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.5,
       })
     );
-    this.gridHighlight.position.y = 10; // Center at y=10 so it covers 0-20
     this.scene.add(this.gridHighlight);
     this.gridHighlight.visible = false;
+
+    // Build Grid Highlight (X axis - thin laser)
+    this.gridHighlightX = new THREE.Mesh(
+      new THREE.BoxGeometry(100, 0.1, 0.1),
+      new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.5,
+      })
+    );
+    this.scene.add(this.gridHighlightX);
+    this.gridHighlightX.visible = false;
+
+    // Build Grid Highlight (Z axis - thin laser)
+    this.gridHighlightZ = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.1, 100),
+      new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.5,
+      })
+    );
+    this.scene.add(this.gridHighlightZ);
+    this.gridHighlightZ.visible = false;
 
     // Grid Helper
     this.gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0x444444);
@@ -156,6 +185,8 @@ export class Game {
     this.resources.loadDefaultPlaceholders();
 
     this.resources.onReady(() => {
+      this.uiManager.setResources(this.resources);
+      this.setupChatSystem();
       this.init();
       this.setupEvents();
       this.setupNetworkHandlers();
@@ -182,6 +213,11 @@ export class Game {
     // Create new rig
     const newRig = CharacterRig.createFromAppearance(this.resources, appearance);
     this.scene.add(newRig.root);
+
+    // 在 LOBBY 状态下保持玩家模型不可见
+    if (this.state === GameState.LOBBY) {
+      newRig.root.visible = false;
+    }
 
     // Update player
     localPlayer.rig = newRig;
@@ -374,8 +410,48 @@ export class Game {
             }
           );
           break;
+
+        case PacketType.CHAT:
+          // 收到聊天消息
+          const chatPayload = packet.p as ChatPayload;
+          this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
+          // 如果是 Host，转发给其他玩家
+          if (this.networkManager.isHostUser()) {
+            this.networkManager.send(packet);
+          }
+          break;
       }
     };
+  }
+
+  private setupChatSystem() {
+    // 设置聊天发送回调
+    this.uiManager.setChatCallback((message: string) => {
+      const chatPayload: ChatPayload = {
+        nickname: this.myPlayerInfo.nickname,
+        message: message,
+      };
+      
+      // 本地显示
+      this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
+      
+      // 发送给其他玩家
+      this.networkManager.send({
+        t: PacketType.CHAT,
+        p: chatPayload,
+      });
+    });
+
+    // 监听 Enter 键打开聊天
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !this.uiManager.isChatInputOpen()) {
+        // 只在非标题界面时允许聊天
+        if (this.state !== GameState.TITLE) {
+          e.preventDefault();
+          this.uiManager.openChatInput();
+        }
+      }
+    });
   }
 
   private checkAllPlayersFinished() {
@@ -438,6 +514,10 @@ export class Game {
   }
 
   private startGame() {
+    // 清理 lobby 角色选择 UI
+    this.uiManager.cleanupLobbyCharacters();
+    this.uiManager.clearUI();
+
     // Update local player model to match selected character
     if (this.myPlayerInfo.character) {
       this.updateLocalPlayerModel(this.myPlayerInfo.character);
@@ -542,17 +622,99 @@ export class Game {
 
     this.buildGridPos.set(snapX, this.buildHeight + 0.5, snapZ);
 
-    this.gridHighlight.position.set(
-      this.buildGridPos.x,
-      10,
-      this.buildGridPos.z
-    );
-    this.gridHighlight.visible = true;
+    // 更新所有方向的激光高光（带遮挡检测）
+    this.updateLaserHighlights();
 
     if (this.ghostObject && this.selectedItem) {
       this.ghostObject.position.copy(this.buildGridPos);
       this.ghostObject.position.y += this.getItemYShift(this.selectedItem);
     }
+  }
+
+  private updateLaserHighlights() {
+    const pos = this.buildGridPos;
+    const rayOrigin = new CANNON.Vec3(pos.x, pos.y, pos.z);
+
+    // Y方向激光（上下两个方向）
+    let yPosHit = 50, yNegHit = -50;
+    const rayYPos = new CANNON.RaycastResult();
+    const rayYNeg = new CANNON.RaycastResult();
+    
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x, pos.y + 50, pos.z),
+      { skipBackfaces: true },
+      rayYPos
+    );
+    if (rayYPos.hasHit) yPosHit = rayYPos.hitPointWorld.y - pos.y;
+
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x, pos.y - 50, pos.z),
+      { skipBackfaces: true },
+      rayYNeg
+    );
+    if (rayYNeg.hasHit) yNegHit = rayYNeg.hitPointWorld.y - pos.y;
+
+    const yLength = yPosHit - yNegHit;
+    const yCenter = pos.y + (yPosHit + yNegHit) / 2;
+    this.gridHighlight.scale.y = yLength / 100;
+    this.gridHighlight.position.set(pos.x, yCenter, pos.z);
+    this.gridHighlight.visible = true;
+
+    // X方向激光（左右两个方向）
+    let xPosHit = 50, xNegHit = -50;
+    const rayXPos = new CANNON.RaycastResult();
+    const rayXNeg = new CANNON.RaycastResult();
+    
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x + 50, pos.y, pos.z),
+      { skipBackfaces: true },
+      rayXPos
+    );
+    if (rayXPos.hasHit) xPosHit = rayXPos.hitPointWorld.x - pos.x;
+
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x - 50, pos.y, pos.z),
+      { skipBackfaces: true },
+      rayXNeg
+    );
+    if (rayXNeg.hasHit) xNegHit = rayXNeg.hitPointWorld.x - pos.x;
+
+    const xLength = xPosHit - xNegHit;
+    const xCenter = pos.x + (xPosHit + xNegHit) / 2;
+    this.gridHighlightX.scale.x = xLength / 100;
+    this.gridHighlightX.position.set(xCenter, pos.y, pos.z);
+    this.gridHighlightX.visible = true;
+
+    // Z方向激光（前后两个方向）
+    let zPosHit = 50, zNegHit = -50;
+    const rayZPos = new CANNON.RaycastResult();
+    const rayZNeg = new CANNON.RaycastResult();
+    
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x, pos.y, pos.z + 50),
+      { skipBackfaces: true },
+      rayZPos
+    );
+    if (rayZPos.hasHit) zPosHit = rayZPos.hitPointWorld.z - pos.z;
+
+    this.physicsWorld.world.raycastClosest(
+      rayOrigin,
+      new CANNON.Vec3(pos.x, pos.y, pos.z - 50),
+      { skipBackfaces: true },
+      rayZNeg
+    );
+    if (rayZNeg.hasHit) zNegHit = rayZNeg.hitPointWorld.z - pos.z;
+
+    const zLength = zPosHit - zNegHit;
+    const zCenter = pos.z + (zPosHit + zNegHit) / 2;
+    this.gridHighlightZ.scale.z = zLength / 100;
+    this.gridHighlightZ.position.set(pos.x, pos.y, zCenter);
+    this.gridHighlightZ.visible = true;
   }
 
   private setupEvents() {
@@ -801,6 +963,8 @@ export class Game {
               }
               // Hide highlight
               this.gridHighlight.visible = false;
+              this.gridHighlightX.visible = false;
+              this.gridHighlightZ.visible = false;
             }
           } else {
             this.uiManager.showMessage("Invalid Placement!");
@@ -976,17 +1140,35 @@ export class Game {
     } else if (newState === GameState.LOBBY) {
       // LOBBY：同样使用正对 UI 面板的视角
       this.cameraLerpActive = false;
-      this.camera.position.set(0, 4, 4);
-      this.camera.lookAt(0, 4, -10);
+      this.camera.position.set(0, 1.5, 6);
+      this.camera.lookAt(0, 1, 0);
+
+      // 隐藏地图
+      this.mapRoot.visible = false;
+
+      // 隐藏所有玩家模型
+      this.players.forEach((player) => {
+        player.rig.root.visible = false;
+      });
 
       this.uiManager.clearUI();
       this.clearLevel(); // Ensure level is cleared when returning to lobby
       this.refreshLobbyUI();
     } else if (newState === GameState.PICK) {
+      // 显示地图
+      this.mapRoot.visible = true;
+
+      // 显示所有玩家模型
+      this.players.forEach((player) => {
+        player.rig.root.visible = true;
+      });
+
       this.uiManager.clearUI();
       document.exitPointerLock();
       this.resetPlayers();
       this.gridHighlight.visible = false;
+      this.gridHighlightX.visible = false;
+      this.gridHighlightZ.visible = false;
       this.gridHelper.visible = false;
       this.partyBoxRoot.visible = true; // Show Party Box (一直可见直到 BUILD_VIEW)
 
@@ -1019,6 +1201,8 @@ export class Game {
       this.partyBoxRoot.visible = false; // Hide Party Box
       document.exitPointerLock();
       this.gridHighlight.visible = false;
+      this.gridHighlightX.visible = false;
+      this.gridHighlightZ.visible = false;
       this.gridHelper.visible = false; // No grid helper
       // this.gridHelper.position.y = 8; // Move grid up
 
@@ -1063,6 +1247,8 @@ export class Game {
     } else if (newState === GameState.COUNTDOWN) {
       this.partyBoxRoot.visible = false;
       this.gridHighlight.visible = false; // Hide highlight
+      this.gridHighlightX.visible = false;
+      this.gridHighlightZ.visible = false;
       if (this.bombRangeIndicator) this.bombRangeIndicator.visible = false;
 
       // Explode Bombs
@@ -1203,11 +1389,17 @@ export class Game {
 
   private resetPlayers() {
     const playerCount = this.players.size;
+    if (playerCount === 0) return;
+    
+    // Start Zone 是 2x2 的区域，中心在 (0, 0, 0)
+    // 在 X 和 Z 方向均匀分布玩家，但保持在 -0.8 到 0.8 范围内
+    const spacing = Math.min(1.6 / Math.max(playerCount - 1, 1), 0.8);
     let index = 0;
     this.players.forEach((player) => {
-      // Spread players horizontally in spawn area
-      const offsetX = (index - (playerCount - 1) / 2) * 1.5; // 1.5 units apart
-      player.resetPosition(new CANNON.Vec3(offsetX, 2, 0));
+      // 横向分布，Z方向稍微错开
+      const offsetX = playerCount === 1 ? 0 : (index - (playerCount - 1) / 2) * spacing;
+      const offsetZ = (index % 2) * 0.3 - 0.15; // 微小的Z方向错开
+      player.resetPosition(new CANNON.Vec3(offsetX, 2, offsetZ));
       index++;
     });
   }
@@ -1355,27 +1547,33 @@ export class Game {
           : this.players.get(p.id);
 
       if (player) {
-        let added = 0;
+        // 分类记录每种得分
+        const scoreBreakdown: { type: string; points: number; color: string }[] = [];
         
         // 1. 终点得分: 如果所有人都到达终点，则没有终点得分；否则到达终点的人获得终点得分
         const reachedGoal = this.finishOrder.includes(p.id);
         if (reachedGoal && !allReachedGoal) {
-          added += GOAL_POINTS;
+          scoreBreakdown.push({ type: "终点", points: GOAL_POINTS, color: "#4CAF50" }); // 绿色
         }
         
         // 2. 独行得分: 如果恰好一个人到达终点
         if (winnersCount === 1 && this.finishOrder[0] === p.id) {
-          added += SOLO_POINTS;
+          scoreBreakdown.push({ type: "独行", points: SOLO_POINTS, color: "#2196F3" }); // 蓝色
         }
         
         // 3. 第一得分: 如果大于一个人到达终点，最早到达的人获得第一得分
         if (winnersCount > 1 && this.finishOrder[0] === p.id) {
-          added += FIRST_POINTS;
+          scoreBreakdown.push({ type: "第一", points: FIRST_POINTS, color: "#FF9800" }); // 橙色
         }
         
         // 4. 陷阱得分: 每杀死一人获得分数
         const kills = this.trapKills.get(p.id) || 0;
-        added += kills * TRAP_KILL_POINTS;
+        if (kills > 0) {
+          scoreBreakdown.push({ type: "陷阱", points: kills * TRAP_KILL_POINTS, color: "#E91E63" }); // 粉红色
+        }
+
+        // 计算总新增分数
+        const added = scoreBreakdown.reduce((sum, s) => sum + s.points, 0);
 
         // Update total score
         if (!(p as any).totalScore) (p as any).totalScore = 0;
@@ -1385,6 +1583,7 @@ export class Game {
           nickname: p.nickname,
           current: (p as any).totalScore,
           added: added,
+          breakdown: scoreBreakdown, // 分类得分明细
         });
       }
     });
@@ -1406,6 +1605,9 @@ export class Game {
   }
 
   private init() {
+    // 将 mapRoot 添加到 scene（用于在 LOBBY 状态隐藏整个地图）
+    this.scene.add(this.mapRoot);
+
     // Sky：改为轻微竖向渐变的卡通天空色（通过雾和环境色统一）
     this.scene.background = new THREE.Color(0x6fb1ff); // 稍深一点的卡通蓝
 
@@ -1493,7 +1695,7 @@ export class Game {
     }
 
     startPlatMesh.receiveShadow = true;
-    this.scene.add(startPlatMesh);
+    this.mapRoot.add(startPlatMesh);
     (startPlatBody as any).meshReference = startPlatMesh;
 
     // 2. Goal Platform (Height 2, Surface 2)
@@ -1524,7 +1726,7 @@ export class Game {
     }
 
     goalPlatMesh.receiveShadow = true;
-    this.scene.add(goalPlatMesh);
+    this.mapRoot.add(goalPlatMesh);
     (goalPlatBody as any).meshReference = goalPlatMesh;
 
     // 3. Gap Spikes (Removed)
@@ -1533,17 +1735,17 @@ export class Game {
     // Start Zone (Blue)
     const startZone = PlaceholderGenerator.createZone(2, 2, 2, 0x0000ff);
     startZone.position.set(0, 1, 0); // On Start Platform (y=0) -> Zone center y=1
-    this.scene.add(startZone);
+    this.mapRoot.add(startZone);
 
     // Goal Zone (Red) - On Goal Platform
     const goalZone = PlaceholderGenerator.createZone(2, 2, 2, 0xff0000);
     goalZone.position.set(0, 3, 25); // Platform y=2 -> Zone center y=3
-    this.scene.add(goalZone);
+    this.mapRoot.add(goalZone);
 
     // 5. Goal Flag
     const flagGroup = PlaceholderGenerator.createFlag();
     flagGroup.position.set(0, 2, 25);
-    this.scene.add(flagGroup);
+    this.mapRoot.add(flagGroup);
 
     // Goal Physics (Trigger)
     const goalBody = BodyFactory.createBox(
@@ -1625,6 +1827,11 @@ export class Game {
         cloud.position.x = -60;
       }
     });
+
+    // Update Lobby character animations
+    if (this.state === GameState.LOBBY) {
+      this.uiManager.updateLobbyAnimations(1 / 60);
+    }
 
     // Rotate Party Box Items
     if (this.state === GameState.PICK) {

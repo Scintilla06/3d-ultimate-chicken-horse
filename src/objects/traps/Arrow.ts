@@ -8,10 +8,14 @@ export class Arrow {
     private lifeTime: number = 3; // Seconds
     private age: number = 0;
     public shouldRemove: boolean = false;
+    private stuck: boolean = false; // 是否已经插入道具
+    private direction: THREE.Vector3;
+    private world: CANNON.World | null = null;
 
     constructor(mesh: THREE.Group, position: THREE.Vector3, direction: THREE.Vector3) {
         this.mesh = mesh.clone();
         this.mesh.position.copy(position);
+        this.direction = direction.clone().normalize();
         
         // Rotate mesh to face direction
         // Assuming arrow model points along +Z. We look at the target point.
@@ -62,10 +66,51 @@ export class Arrow {
         this.body.collisionResponse = false;
     }
 
+    public setWorld(world: CANNON.World) {
+        this.world = world;
+    }
+
     public update(dt: number) {
         this.age += dt;
         if (this.age > this.lifeTime) {
             this.shouldRemove = true;
+        }
+
+        // 如果已经插入道具，不再移动
+        if (this.stuck) return;
+
+        // 检测前方是否有障碍物（使用射线检测）
+        if (this.world) {
+            const rayStart = new CANNON.Vec3(
+                this.body.position.x,
+                this.body.position.y,
+                this.body.position.z
+            );
+            const rayEnd = new CANNON.Vec3(
+                this.body.position.x + this.direction.x * this.speed * dt * 2,
+                this.body.position.y + this.direction.y * this.speed * dt * 2,
+                this.body.position.z + this.direction.z * this.speed * dt * 2
+            );
+            
+            const result = new CANNON.RaycastResult();
+            this.world.raycastClosest(rayStart, rayEnd, { skipBackfaces: true }, result);
+            
+            if (result.hasHit) {
+                const hitBody = result.body;
+                const tag = (hitBody as any).userData?.tag;
+                
+                // 如果碰到的是 block 或 ground，箭矢停止
+                if (tag === "block" || tag === "ground") {
+                    this.stuck = true;
+                    this.body.velocity.set(0, 0, 0);
+                    // 将箭矢位置设置到碰撞点稍前的位置
+                    this.body.position.set(
+                        result.hitPointWorld.x - this.direction.x * 0.3,
+                        result.hitPointWorld.y - this.direction.y * 0.3,
+                        result.hitPointWorld.z - this.direction.z * 0.3
+                    );
+                }
+            }
         }
         
         // Sync mesh with body

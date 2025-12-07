@@ -18,7 +18,13 @@ export enum PacketType {
     PICK_ITEM = 'Pick',
     ITEM_PICKED = 'Picked',
     PLAYER_FINISHED_RUN = 'Fin_Run',
-    SHOW_SCORE = 'Score'
+    SHOW_SCORE = 'Score',
+    CHAT = 'Chat'
+}
+
+export interface ChatPayload {
+    nickname: string;
+    message: string;
 }
 
 export interface InputPayload {
