@@ -17,7 +17,11 @@ import { Player } from "../objects/Player";
 import { CharacterRig } from "../objects/character/CharacterRig";
 import { getCharacterAppearance } from "../objects/character/CharacterRegistry";
 import { BodyFactory } from "../physics/BodyFactory";
-import { PlaceholderGenerator } from "../utils/PlaceholderGenerator";
+import { CameraController } from "./CameraController";
+import { BuildSystem } from "./BuildSystem";
+import { ScoreManager } from "./ScoreManager";
+import { LevelManager } from "./LevelManager";
+import { PartyBoxManager } from "./PartyBoxManager";
 import { Crossbow } from "../objects/traps/Crossbow";
 
 export enum GameState {
@@ -33,6 +37,7 @@ export enum GameState {
 }
 
 export class Game {
+  // 核心组件
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
@@ -42,14 +47,21 @@ export class Game {
   private loop: Loop;
   private uiManager: UIManager;
   private inputManager: InputManager;
+
+  // 新增管理器
+  private cameraController: CameraController;
+  private buildSystem: BuildSystem;
+  private scoreManager: ScoreManager;
+  private levelManager!: LevelManager;
+  private partyBoxManager!: PartyBoxManager;
+
+  // 玩家和十字弓
   private players: Map<string, Player> = new Map();
   private crossbows: Crossbow[] = [];
 
-  // Multiplayer
+  // 多人游戏
   private lobbyPlayers: PlayerInfo[] = [];
   private playersFinishedTurn: Set<string> = new Set();
-  private finishOrder: string[] = []; // Track order of players reaching goal
-  private trapKills: Map<string, number> = new Map(); // Track trap kills per player
   private myPlayerInfo: PlayerInfo = {
     id: "",
     nickname: "Player",
@@ -58,58 +70,16 @@ export class Game {
     isReady: false,
   };
 
-  private state: GameState = -1 as GameState; // Start with invalid state to ensure first transition works
+  // 游戏状态
+  private state: GameState = -1 as GameState;
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
   private mouse: THREE.Vector2 = new THREE.Vector2();
-  private ghostObject: THREE.Group | null = null;
-  private selectedItem: string | null = null;
-  private bombRangeIndicator: THREE.Mesh | null = null;
-  private highlightedMeshes: Map<THREE.Mesh, number> = new Map(); // Mesh -> Original Hex Color
 
-  // Build System
-  private buildGridPos: THREE.Vector3 = new THREE.Vector3();
-  private buildHeight: number = 0;
-  private buildRotation: number = 0; // 0, 1, 2, 3 (* PI/2)
-  private gridHighlight: THREE.Mesh;
-  private gridHighlightX: THREE.Mesh; // X方向激光（沿X轴延伸）
-  private gridHighlightZ: THREE.Mesh; // Z方向激光（沿Z轴延伸）
-  private gridHelper: THREE.GridHelper;
-  private buildCameraAngle: number = 0;
-
-  // Countdown
+  // 倒计时
   private countdownTimer: number = 0;
 
-  // Camera Control
-  private cameraAngleY: number = 0; // Horizontal angle (Yaw)
-  private cameraAngleX: number = 0.3; // Vertical angle (Pitch)
-  private cameraDistance: number = 6;
-
-  // Camera Tween
-  private cameraLerpActive: boolean = false;
-  private cameraLerpStart: THREE.Vector3 = new THREE.Vector3();
-  private cameraLerpEnd: THREE.Vector3 = new THREE.Vector3();
-  private cameraLerpT: number = 0;
-  private cameraLerpDuration: number = 0.8; // seconds
-
-  private readonly GOAL_SCORE = 50;
-
-  // Round tracking
-  private currentRound: number = 0;
-
-  // Party Box
-  private partyBoxRoot: THREE.Group = new THREE.Group();
-
-  // Map Root (地图元素容器，用于在LOBBY时隐藏)
-  private mapRoot: THREE.Group = new THREE.Group();
-
-  // Environment
-  private clouds: THREE.Group[] = [];
-  private partyBoxItems: THREE.Group[] = [];
-  private availableItems: Set<string> = new Set(); // Track available items by ID (or index?)
-  // Since items are objects, we need a unique ID for each spawned item instance.
-  // Let's use index in partyBoxItems array for simplicity.
-
   constructor() {
+    // 初始化渲染器
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(
       75,
@@ -125,6 +95,7 @@ export class Game {
       .getElementById("game-container")
       ?.appendChild(this.renderer.domElement);
 
+    // 初始化核心组件
     this.physicsWorld = new PhysicsWorld();
     this.networkManager = new NetworkManager();
     this.resources = new Resources();
@@ -132,60 +103,38 @@ export class Game {
     this.inputManager = new InputManager();
     this.loop = new Loop(this.update.bind(this));
 
-    // 将 3D 场景引用传给 UI 管理器，用于 3D UI 面板
+    // 初始化管理器
+    this.cameraController = new CameraController(this.camera);
+    this.buildSystem = new BuildSystem(
+      this.scene,
+      this.physicsWorld,
+      this.resources
+    );
+    this.scoreManager = new ScoreManager();
+
+    // 将 3D 场景引用传给 UI 管理器
     this.uiManager.attachScene(this.scene, this.camera, this.raycaster);
 
-    // Build Grid Highlight (Column - Y axis - thin laser)
-    this.gridHighlight = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 100, 0.1),
-      new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
-        transparent: true,
-        opacity: 0.5,
-      })
-    );
-    this.scene.add(this.gridHighlight);
-    this.gridHighlight.visible = false;
-
-    // Build Grid Highlight (X axis - thin laser)
-    this.gridHighlightX = new THREE.Mesh(
-      new THREE.BoxGeometry(100, 0.1, 0.1),
-      new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
-        transparent: true,
-        opacity: 0.5,
-      })
-    );
-    this.scene.add(this.gridHighlightX);
-    this.gridHighlightX.visible = false;
-
-    // Build Grid Highlight (Z axis - thin laser)
-    this.gridHighlightZ = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 100),
-      new THREE.MeshBasicMaterial({
-        color: 0x00ff00,
-        transparent: true,
-        opacity: 0.5,
-      })
-    );
-    this.scene.add(this.gridHighlightZ);
-    this.gridHighlightZ.visible = false;
-
-    // Grid Helper
-    this.gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0x444444);
-    this.gridHelper.position.y = 0.01; // Slightly above ground
-    this.scene.add(this.gridHelper);
-    this.gridHelper.visible = false;
-
-    // Party Box Root
-    this.scene.add(this.partyBoxRoot);
-    this.partyBoxRoot.visible = false;
-
-    // Load resources
+    // 加载资源
     this.resources.loadDefaultPlaceholders();
 
     this.resources.onReady(() => {
       this.uiManager.setResources(this.resources);
+
+      // 初始化关卡管理器（需要资源加载完成）
+      this.levelManager = new LevelManager(
+        this.scene,
+        this.physicsWorld,
+        this.resources
+      );
+      this.levelManager.initScene();
+
+      // 初始化 Party Box 管理器
+      this.partyBoxManager = new PartyBoxManager(
+        this.resources,
+        this.levelManager.getPartyBoxRoot()
+      );
+
       this.setupChatSystem();
       this.init();
       this.setupEvents();
@@ -193,7 +142,7 @@ export class Game {
       this.setState(GameState.TITLE);
     });
 
-    // Handle Window Resize
+    // 窗口大小调整
     window.addEventListener("resize", () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
@@ -201,1608 +150,14 @@ export class Game {
     });
   }
 
-  private updateLocalPlayerModel(characterId: string) {
-    const localPlayer = this.players.get("local");
-    if (!localPlayer) return;
+  // ========== 初始化 ==========
 
-    const appearance = getCharacterAppearance(characterId);
-
-    // Remove old rig
-    this.scene.remove(localPlayer.rig.root);
-
-    // Create new rig
-    const newRig = CharacterRig.createFromAppearance(this.resources, appearance);
-    this.scene.add(newRig.root);
-
-    // 在 LOBBY 状态下保持玩家模型不可见
-    if (this.state === GameState.LOBBY) {
-      newRig.root.visible = false;
-    }
-
-    // Update player
-    localPlayer.rig = newRig;
-
-    // Sync
-    newRig.updateFromBody(localPlayer.body);
-  }
-
-  private setupNetworkHandlers() {
-    this.networkManager.onIdAssigned = (id) => {
-      this.myPlayerInfo.id = id;
-      if (this.state === GameState.LOBBY) {
-        this.refreshLobbyUI();
-      }
-    };
-
-    this.networkManager.onPacketReceived = (
-      packet: Packet,
-      senderId: string
-    ) => {
-      switch (packet.t) {
-        case PacketType.JOIN:
-          // Host receives Join request
-          if (this.networkManager.isHostUser()) {
-            // Prevent duplicate joins
-            if (this.lobbyPlayers.some((p) => p.id === senderId)) return;
-
-            const newPlayer: PlayerInfo = {
-              id: senderId,
-              nickname: packet.p.nickname,
-              character: "", // Default
-              isHost: false,
-              isReady: false,
-            };
-            this.lobbyPlayers.push(newPlayer);
-
-            // Send Welcome packet with current state
-            this.networkManager.send(
-              {
-                t: PacketType.WELCOME,
-                p: {
-                  players: this.lobbyPlayers,
-                  state: this.state,
-                },
-              },
-              senderId
-            );
-
-            // Broadcast new player list
-            this.broadcastLobbyUpdate();
-          }
-          break;
-
-        case PacketType.WELCOME:
-          // Client receives Welcome
-          this.lobbyPlayers = packet.p.players;
-          this.myPlayerInfo.id = this.networkManager.getMyId();
-
-          // Sync my character
-          const myProfile = this.lobbyPlayers.find(
-            (p) => p.id === this.myPlayerInfo.id
-          );
-          if (myProfile && myProfile.character) {
-            this.updateLocalPlayerModel(myProfile.character);
-          }
-
-          this.setState(GameState.LOBBY);
-          break;
-
-        case PacketType.LOBBY_UPDATE:
-          this.lobbyPlayers = packet.p;
-          // Check if my character changed
-          const me = this.lobbyPlayers.find(
-            (p) => p.id === this.networkManager.getMyId()
-          );
-          if (me && me.character) {
-            this.updateLocalPlayerModel(me.character);
-          }
-          this.refreshLobbyUI();
-          break;
-
-        case PacketType.CHARACTER_SELECT:
-          if (this.networkManager.isHostUser()) {
-            const requestedChar = packet.p.charId;
-            const sender = this.lobbyPlayers.find((pl) => pl.id === senderId);
-
-            if (sender) {
-              // Check if taken by anyone else
-              const isTaken = this.lobbyPlayers.some(
-                (p) => p.character === requestedChar && p.id !== senderId
-              );
-
-              if (!isTaken) {
-                sender.character = requestedChar;
-                this.broadcastLobbyUpdate();
-              } else {
-                // If taken, we might want to send an update anyway to ensure client is in sync
-                // (e.g. if they missed the previous update)
-                this.broadcastLobbyUpdate();
-              }
-            }
-          }
-          break;
-
-        case PacketType.START_GAME:
-          if (this.networkManager.isHostUser()) return;
-          this.startGame();
-          break;
-
-        case PacketType.SNAPSHOT:
-          this.handleSnapshot(packet.p);
-          // If Host, relay to others (excluding sender)
-          if (this.networkManager.isHostUser()) {
-            this.networkManager.send(packet, undefined); // Broadcast to all?
-            // Wait, broadcast sends to everyone including sender?
-            // NetworkManager.send iterates all connections.
-            // We should probably filter sender.
-            // But for now, sending back is fine (confirmation), or we can ignore it on client side if id matches self.
-          }
-          break;
-
-        case PacketType.EVENT_PLACE:
-          // Check if I am the original sender (to avoid duplicate placement)
-          if (packet.p.playerId === this.networkManager.getMyId()) return;
-
-          this.placeObject(
-            packet.p.itemId,
-            new THREE.Vector3(packet.p.pos.x, packet.p.pos.y, packet.p.pos.z),
-            packet.p.rot || 0
-          );
-          // Track turn using the original sender ID
-          this.playersFinishedTurn.add(packet.p.playerId);
-          this.checkAllPlayersFinished();
-
-          // If Host, relay
-          if (this.networkManager.isHostUser()) {
-            this.networkManager.send(packet);
-          }
-          break;
-
-        case PacketType.PARTY_BOX_UPDATE:
-          this.spawnPartyBoxItems(packet.p);
-          break;
-
-        case PacketType.PICK_ITEM:
-          // Host receives Pick Request
-          if (this.networkManager.isHostUser()) {
-            this.processPickRequest(packet.p.index, senderId);
-          }
-          break;
-
-        case PacketType.ITEM_PICKED:
-          this.handleItemPicked(packet.p.index, packet.p.playerId);
-          break;
-
-        case PacketType.PLAYER_FINISHED_RUN:
-          // Host tracks finished players
-          if (this.networkManager.isHostUser()) {
-            // If I am the sender, I already handled this in update()
-            if (senderId === this.networkManager.getMyId()) return;
-
-            this.playersFinishedTurn.add(senderId);
-            
-            // Track finish order for players who won
-            if (packet.p.won && !this.finishOrder.includes(senderId)) {
-              this.finishOrder.push(senderId);
-            }
-            
-            // Track trap kills
-            if (packet.p.killedBy && packet.p.killedBy !== senderId) {
-              const currentKills = this.trapKills.get(packet.p.killedBy) || 0;
-              this.trapKills.set(packet.p.killedBy, currentKills + 1);
-            }
-
-            if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
-              // All finished -> Show Score
-              this.setState(GameState.SCORE);
-            }
-          }
-          break;
-
-        case PacketType.SHOW_SCORE:
-          if (this.networkManager.isHostUser()) return;
-          this.setState(GameState.SCORE);
-          this.uiManager.showScoreScreen(
-            packet.p.scores,
-            this.GOAL_SCORE,
-            () => {
-              // Only Host triggers next round, but this callback might be useful for local cleanup
-            }
-          );
-          break;
-
-        case PacketType.GAME_WIN:
-          // 客户端收到赢家信息
-          if (this.networkManager.isHostUser()) return;
-          this.uiManager.showWinScreen(
-            packet.p.nickname,
-            packet.p.character,
-            () => {
-              // 客户端返回大厅
-              this.lobbyPlayers.forEach((p) => {
-                (p as any).totalScore = 0;
-              });
-              this.setState(GameState.LOBBY);
-            }
-          );
-          break;
-
-        case PacketType.CHAT:
-          // 收到聊天消息
-          const chatPayload = packet.p as ChatPayload;
-          this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
-          // 如果是 Host，转发给其他玩家
-          if (this.networkManager.isHostUser()) {
-            this.networkManager.send(packet);
-          }
-          break;
-      }
-    };
-  }
-
-  private setupChatSystem() {
-    // 设置聊天发送回调
-    this.uiManager.setChatCallback((message: string) => {
-      const chatPayload: ChatPayload = {
-        nickname: this.myPlayerInfo.nickname,
-        message: message,
-      };
-      
-      // 本地显示
-      this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
-      
-      // 发送给其他玩家
-      this.networkManager.send({
-        t: PacketType.CHAT,
-        p: chatPayload,
-      });
-    });
-
-    // 监听 Enter 键打开聊天
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !this.uiManager.isChatInputOpen()) {
-        // 只在非标题界面时允许聊天
-        if (this.state !== GameState.TITLE) {
-          e.preventDefault();
-          this.uiManager.openChatInput();
-        }
-      }
-    });
-  }
-
-  private checkAllPlayersFinished() {
-    if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
-      this.setState(GameState.COUNTDOWN);
-    }
-  }
-
-  private broadcastLobbyUpdate() {
-    this.networkManager.send({
-      t: PacketType.LOBBY_UPDATE,
-      p: this.lobbyPlayers,
-    });
-    this.refreshLobbyUI();
-  }
-
-  private refreshLobbyUI() {
-    if (this.state === GameState.LOBBY) {
-      this.uiManager.showLobbyScreen(
-        this.networkManager.getMyId(),
-        this.lobbyPlayers,
-        this.networkManager.isHostUser(),
-        (charId) => {
-          if (this.networkManager.isHostUser()) {
-            // Host Logic
-            const isTaken = this.lobbyPlayers.some(
-              (p) => p.character === charId && p.id !== this.myPlayerInfo.id
-            );
-            if (!isTaken) {
-              this.myPlayerInfo.character = charId;
-              const me = this.lobbyPlayers.find(
-                (p) => p.id === this.myPlayerInfo.id
-              );
-              if (me) me.character = charId;
-              this.updateLocalPlayerModel(charId);
-              this.broadcastLobbyUpdate();
-            }
-          } else {
-            // Client Logic
-            this.networkManager.send({
-              t: PacketType.CHARACTER_SELECT,
-              p: { charId: charId },
-            });
-          }
-        },
-        () => {
-          // Start Game (Host)
-          const allReady = this.lobbyPlayers.every(
-            (p) => p.character && p.character !== ""
-          );
-          if (allReady) {
-            this.networkManager.send({ t: PacketType.START_GAME, p: {} });
-            this.startGame();
-          } else {
-            this.uiManager.showMessage("All players must select a character!");
-          }
-        }
-      );
-    }
-  }
-
-  private startGame() {
-    // 清理 lobby 角色选择 UI
-    this.uiManager.cleanupLobbyCharacters();
-    this.uiManager.clearUI();
-
-    // Update local player model to match selected character
-    if (this.myPlayerInfo.character) {
-      this.updateLocalPlayerModel(this.myPlayerInfo.character);
-    }
-
-    // Spawn remote players only if they don't already exist
-    this.lobbyPlayers.forEach((p) => {
-      if (p.id !== this.myPlayerInfo.id && !this.players.has(p.id)) {
-        this.spawnRemotePlayer(p);
-      }
-    });
-
-    this.setState(GameState.PICK);
-  }
-
-  private spawnRemotePlayer(info: PlayerInfo) {
-    const appearance = getCharacterAppearance(info.character);
-    const rig = CharacterRig.createFromAppearance(this.resources, appearance);
-    this.scene.add(rig.root);
-
-    // Remote players are kinematic or just visual updates?
-    // For simplicity, we'll make them kinematic bodies controlled by snapshots
-    const playerBody = BodyFactory.createPlayerBody(
-      0.4,
-      1.2,
-      0,
-      new CANNON.Vec3(0, 5, 0)
-    );
-    playerBody.type = CANNON.Body.KINEMATIC;
-
-    // No collision with local player to avoid lag issues?
-    // Or keep collision? Let's keep collision but make it soft?
-    // Actually, for P2P, usually you don't collide with ghosts to prevent jitter.
-    playerBody.collisionFilterGroup = 2;
-    playerBody.collisionFilterMask = 1; // Collide with environment but maybe not other players?
-
-    (playerBody as any).userData = { tag: "player" };
-
-    this.physicsWorld.world.addBody(playerBody);
-
-    const player = new Player(rig, playerBody);
-    this.players.set(info.id, player);
-  }
-
-  private handleSnapshot(data: SnapshotPayload) {
-    if (data.id === this.networkManager.getMyId()) return;
-    const player = this.players.get(data.id);
-    if (player) {
-      // Interpolate? For now, just set
-      player.body.position.set(data.pos[0], data.pos[1], data.pos[2]);
-      player.body.quaternion.set(
-        data.rot[0],
-        data.rot[1],
-        data.rot[2],
-        data.rot[3]
-      );
-      // Update mesh
-      player.rig.updateFromBody(player.body);
-    }
-  }
-
-  private getItemYShift(itemId: string): number {
-    // All items are now placed at their correct visual position (surface or center)
-    // by the mousemove logic. No additional shift needed.
-    if (itemId === "spikes") {
-      return -0.25; // Shift down to sit on floor (assuming height 0.5)
-    }
-    return 0;
-  }
-
-  private getItemSize(itemId: string, rotationIndex: number): THREE.Vector3 {
-    if (itemId === "wood_block_321") {
-      // Rotation 0: 3x1x2
-      // Rotation 1: 2x1x3
-      if (rotationIndex % 2 === 0) {
-        return new THREE.Vector3(3, 1, 2);
-      } else {
-        return new THREE.Vector3(2, 1, 3);
-      }
-    } else if (itemId === "spikes") {
-      return new THREE.Vector3(1, 1, 1);
-    }
-    return new THREE.Vector3(1, 1, 1);
-  }
-
-  private updateGhostPositionFromMouse() {
-    this.raycaster.setFromCamera(this.mouse, this.camera);
-    const planeHeight = 8;
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeHeight);
-    const target = new THREE.Vector3();
-    this.raycaster.ray.intersectPlane(plane, target);
-
-    const size = this.getItemSize(this.selectedItem || "", this.buildRotation);
-
-    // Snap to grid
-    // If size is even, snap to integer (Round)
-    // If size is odd, snap to half-integer (Floor + 0.5)
-    const snapX =
-      size.x % 2 === 0 ? Math.round(target.x) : Math.floor(target.x) + 0.5;
-    const snapZ =
-      size.z % 2 === 0 ? Math.round(target.z) : Math.floor(target.z) + 0.5;
-
-    this.buildGridPos.set(snapX, this.buildHeight + 0.5, snapZ);
-
-    // 更新所有方向的激光高光（带遮挡检测）
-    this.updateLaserHighlights();
-
-    if (this.ghostObject && this.selectedItem) {
-      this.ghostObject.position.copy(this.buildGridPos);
-      this.ghostObject.position.y += this.getItemYShift(this.selectedItem);
-    }
-  }
-
-  private updateLaserHighlights() {
-    const pos = this.buildGridPos;
-    const rayOrigin = new CANNON.Vec3(pos.x, pos.y, pos.z);
-
-    // Y方向激光（上下两个方向）
-    let yPosHit = 50, yNegHit = -50;
-    const rayYPos = new CANNON.RaycastResult();
-    const rayYNeg = new CANNON.RaycastResult();
-    
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x, pos.y + 50, pos.z),
-      { skipBackfaces: true },
-      rayYPos
-    );
-    if (rayYPos.hasHit) yPosHit = rayYPos.hitPointWorld.y - pos.y;
-
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x, pos.y - 50, pos.z),
-      { skipBackfaces: true },
-      rayYNeg
-    );
-    if (rayYNeg.hasHit) yNegHit = rayYNeg.hitPointWorld.y - pos.y;
-
-    const yLength = yPosHit - yNegHit;
-    const yCenter = pos.y + (yPosHit + yNegHit) / 2;
-    this.gridHighlight.scale.y = yLength / 100;
-    this.gridHighlight.position.set(pos.x, yCenter, pos.z);
-    this.gridHighlight.visible = true;
-
-    // X方向激光（左右两个方向）
-    let xPosHit = 50, xNegHit = -50;
-    const rayXPos = new CANNON.RaycastResult();
-    const rayXNeg = new CANNON.RaycastResult();
-    
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x + 50, pos.y, pos.z),
-      { skipBackfaces: true },
-      rayXPos
-    );
-    if (rayXPos.hasHit) xPosHit = rayXPos.hitPointWorld.x - pos.x;
-
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x - 50, pos.y, pos.z),
-      { skipBackfaces: true },
-      rayXNeg
-    );
-    if (rayXNeg.hasHit) xNegHit = rayXNeg.hitPointWorld.x - pos.x;
-
-    const xLength = xPosHit - xNegHit;
-    const xCenter = pos.x + (xPosHit + xNegHit) / 2;
-    this.gridHighlightX.scale.x = xLength / 100;
-    this.gridHighlightX.position.set(xCenter, pos.y, pos.z);
-    this.gridHighlightX.visible = true;
-
-    // Z方向激光（前后两个方向）
-    let zPosHit = 50, zNegHit = -50;
-    const rayZPos = new CANNON.RaycastResult();
-    const rayZNeg = new CANNON.RaycastResult();
-    
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x, pos.y, pos.z + 50),
-      { skipBackfaces: true },
-      rayZPos
-    );
-    if (rayZPos.hasHit) zPosHit = rayZPos.hitPointWorld.z - pos.z;
-
-    this.physicsWorld.world.raycastClosest(
-      rayOrigin,
-      new CANNON.Vec3(pos.x, pos.y, pos.z - 50),
-      { skipBackfaces: true },
-      rayZNeg
-    );
-    if (rayZNeg.hasHit) zNegHit = rayZNeg.hitPointWorld.z - pos.z;
-
-    const zLength = zPosHit - zNegHit;
-    const zCenter = pos.z + (zPosHit + zNegHit) / 2;
-    this.gridHighlightZ.scale.z = zLength / 100;
-    this.gridHighlightZ.position.set(pos.x, pos.y, zCenter);
-    this.gridHighlightZ.visible = true;
-  }
-
-  private setupEvents() {
-    window.addEventListener("mousemove", (event) => {
-      // 更新 3D UI 的鼠标坐标
-      this.uiManager.updatePointerFromMouse(
-        event.clientX,
-        event.clientY,
-        window.innerWidth,
-        window.innerHeight
-      );
-      // Update mouse coordinates for Raycasting
-      this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-      if (this.state === GameState.BUILD_VIEW) {
-        // Rotate Camera around the map center on a circular orbit
-        this.buildCameraAngle -= event.movementX * 0.005;
-        const radius = 30; // Radius for overview
-        const height = 20; // Height above the map
-        const centerX = 0; // Map center X
-        const centerZ = 12.5; // Map center Z (between start z=0 and goal z=25)
-        this.camera.position.x = centerX + Math.sin(this.buildCameraAngle) * radius;
-        this.camera.position.y = height;
-        this.camera.position.z = centerZ + Math.cos(this.buildCameraAngle) * radius;
-        this.camera.lookAt(centerX, 1, centerZ);
-      } else if (
-        this.state === GameState.RUN &&
-        !this.playersFinishedTurn.has(this.networkManager.getMyId())
-      ) {
-        // Spectator Free Look (Drag to rotate)
-        if (event.buttons === 1 || event.buttons === 2) {
-          const euler = new THREE.Euler(0, 0, 0, "YXZ");
-          euler.setFromQuaternion(this.camera.quaternion);
-          euler.y -= event.movementX * 0.002;
-          euler.x -= event.movementY * 0.002;
-          euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-          this.camera.quaternion.setFromEuler(euler);
-        }
-      } else if (this.state === GameState.BUILD_PLACE) {
-        this.updateGhostPositionFromMouse();
-
-        if (this.ghostObject && this.selectedItem) {
-          // Bomb Range Indicator
-          if (this.selectedItem === "bomb") {
-            if (!this.bombRangeIndicator) {
-              this.bombRangeIndicator = new THREE.Mesh(
-                new THREE.SphereGeometry(3, 16, 16),
-                new THREE.MeshBasicMaterial({
-                  color: 0xff0000,
-                  transparent: true,
-                  opacity: 0.3,
-                  wireframe: true,
-                })
-              );
-              this.scene.add(this.bombRangeIndicator);
-            }
-            this.bombRangeIndicator.position.copy(this.ghostObject.position);
-            this.bombRangeIndicator.visible = true;
-
-            // Highlight targets
-            // Restore old highlights
-            this.highlightedMeshes.forEach((color, mesh) => {
-              if ((mesh.material as any).color)
-                (mesh.material as any).color.setHex(color);
-            });
-            this.highlightedMeshes.clear();
-
-            // Find new targets
-            const range = 3;
-            this.physicsWorld.world.bodies.forEach((b) => {
-              if (
-                b.position.distanceTo(
-                  new CANNON.Vec3(
-                    this.ghostObject!.position.x,
-                    this.ghostObject!.position.y,
-                    this.ghostObject!.position.z
-                  )
-                ) < range
-              ) {
-                const userData = (b as any).userData;
-                if (
-                  userData &&
-                  userData.tag !== "ground" &&
-                  userData.tag !== "player" &&
-                  userData.tag !== "goal"
-                ) {
-                  const mesh = (b as any).meshReference as THREE.Mesh; // We attached meshReference in placeObject
-                  if (mesh) {
-                    // Traverse if group
-                    mesh.traverse((child) => {
-                      if (child instanceof THREE.Mesh) {
-                        if (!this.highlightedMeshes.has(child)) {
-                          this.highlightedMeshes.set(
-                            child,
-                            (child.material as any).color.getHex()
-                          );
-                          (child.material as any).color.setHex(0xff0000);
-                        }
-                      }
-                    });
-                  }
-                }
-              }
-            });
-          } else {
-            if (this.bombRangeIndicator)
-              this.bombRangeIndicator.visible = false;
-            // Clear highlights
-            this.highlightedMeshes.forEach((color, mesh) => {
-              if ((mesh.material as any).color)
-                (mesh.material as any).color.setHex(color);
-            });
-            this.highlightedMeshes.clear();
-          }
-        }
-      }
-    });
-
-    window.addEventListener("wheel", (event) => {
-      if (this.state === GameState.BUILD_PLACE) {
-        // Adjust height
-        this.buildHeight += event.deltaY > 0 ? -1 : 1;
-        // Clamp between 0 and 15
-        this.buildHeight = Math.max(0, Math.min(15, this.buildHeight));
-
-        this.buildGridPos.y = this.buildHeight + 0.5;
-
-        if (this.ghostObject && this.selectedItem) {
-          this.ghostObject.position.copy(this.buildGridPos);
-          this.ghostObject.position.y += this.getItemYShift(this.selectedItem);
-        }
-        // Update all laser highlights to follow the item
-        this.updateLaserHighlights();
-      }
-    });
-
-    window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        if (this.state === GameState.BUILD_PLACE) {
-          this.setState(GameState.BUILD_VIEW);
-        }
-      } else if (event.code === "KeyQ") {
-        if (this.state === GameState.BUILD_PLACE) {
-          this.buildRotation = (this.buildRotation + 1) % 4;
-          if (this.ghostObject) {
-            this.updateGhostRotation();
-            this.updateGhostPositionFromMouse();
-          }
-        }
-      }
-    });
-
-    window.addEventListener("mousedown", () => {
-      // 让 3D UI 在按下时做视觉反馈（不阻止后续 click）
-      this.uiManager.handlePointerDown();
-    });
-
-    window.addEventListener("click", () => {
-      // 优先让 3D UI 处理点击
-      const consumed = this.uiManager.handleClick();
-      if (consumed) return;
-
-      if (this.state === GameState.PICK) {
-        // Raycast for Party Box Items
-        this.raycaster.setFromCamera(this.mouse, this.camera);
-        const intersects = this.raycaster.intersectObjects(
-          this.partyBoxItems,
-          true
-        );
-
-        if (intersects.length > 0) {
-          // Find the root group of the clicked item
-          let target = intersects[0].object;
-          while (target.parent && !target.userData.itemId) {
-            target = target.parent;
-          }
-
-          if (target.userData.itemId) {
-            // Request Pick
-            // Find index
-            const index = this.partyBoxItems.indexOf(target as THREE.Group);
-            if (index !== -1) {
-              if (this.networkManager.isHostUser()) {
-                // Host processes directly
-                this.processPickRequest(index, this.networkManager.getMyId());
-              } else {
-                // Client sends request
-                this.networkManager.send({
-                  t: PacketType.PICK_ITEM,
-                  p: { index: index },
-                }); // Broadcasts to host
-              }
-            }
-          }
-        }
-      } else if (this.state === GameState.BUILD_VIEW) {
-        // Confirm View, move to Place
-        this.setState(GameState.BUILD_PLACE);
-      } else if (this.state === GameState.BUILD_PLACE) {
-        // Confirm Placement
-        if (this.ghostObject && this.selectedItem) {
-          // Validate Placement for Surfaces
-          if (
-            this.isValidPlacement(this.selectedItem, this.ghostObject.position)
-          ) {
-            this.placeObject(
-              this.selectedItem,
-              this.ghostObject.position,
-              this.buildRotation
-            );
-
-            // Track Turn
-            this.playersFinishedTurn.add(this.networkManager.getMyId());
-
-            // Send Network Event
-            this.networkManager.send({
-              t: PacketType.EVENT_PLACE,
-              p: {
-                itemId: this.selectedItem,
-                pos: {
-                  x: this.ghostObject.position.x,
-                  y: this.ghostObject.position.y,
-                  z: this.ghostObject.position.z,
-                },
-                rot: this.buildRotation,
-                playerId: this.networkManager.getMyId(),
-              },
-            });
-
-            // Check if everyone finished
-            this.checkAllPlayersFinished();
-
-            // If not finished, maybe show "Waiting for others..."
-            // Note: state might have changed to COUNTDOWN inside checkAllPlayersFinished
-            if (this.state === GameState.BUILD_PLACE) {
-              this.uiManager.showMessage("Waiting for other players...");
-              // Hide ghost
-              if (this.ghostObject) {
-                this.scene.remove(this.ghostObject);
-                this.ghostObject = null;
-              }
-              // Hide highlight
-              this.gridHighlight.visible = false;
-              this.gridHighlightX.visible = false;
-              this.gridHighlightZ.visible = false;
-            }
-          } else {
-            this.uiManager.showMessage("Invalid Placement!");
-          }
-        }
-      } else if (
-        this.state === GameState.RUN ||
-        this.state === GameState.COUNTDOWN
-      ) {
-        // Request pointer lock for camera control
-        document.body.requestPointerLock();
-      }
-      // Note: SCORE state transition is handled by UIManager callback, not by click event
-    });
-  }
-
-  private updateGhostRotation() {
-    if (!this.ghostObject || !this.selectedItem) return;
-
-    // Reset rotation
-    this.ghostObject.rotation.set(0, 0, 0);
-
-    // Apply User Rotation (Y-axis)
-    const q = new THREE.Quaternion();
-    q.setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      (this.buildRotation * Math.PI) / 2
-    );
-    this.ghostObject.applyQuaternion(q);
-  }
-
-  private isValidPlacement(itemId: string, position: THREE.Vector3): boolean {
-    // 1. Check for Overlap using AABB
-    // Determine size based on item type to avoid false positives with floor
-    let halfExtents = new CANNON.Vec3(0.45, 0.45, 0.45);
-
-    if (itemId === "wood_block_321") {
-      // 3x2x1 (X=3, Z=2, Y=1)
-      if (this.buildRotation % 2 === 0) {
-        halfExtents.set(1.45, 0.45, 0.95);
-      } else {
-        halfExtents.set(0.95, 0.45, 1.45);
-      }
-    } else if (itemId === "spikes") {
-      // Spikes are shorter (0.5 height), so we reduce the check box
-      // Use 0.24 to avoid floating point overlap with floor at y=0
-      halfExtents.set(0.45, 0.24, 0.45);
-    } else if (itemId === "crossbow") {
-      halfExtents.set(0.45, 0.45, 0.45);
-    }
-
-    const placeAABB = new CANNON.AABB({
-      lowerBound: new CANNON.Vec3(
-        position.x - halfExtents.x,
-        position.y - halfExtents.y,
-        position.z - halfExtents.z
-      ),
-      upperBound: new CANNON.Vec3(
-        position.x + halfExtents.x,
-        position.y + halfExtents.y,
-        position.z + halfExtents.z
-      ),
-    });
-
-    let overlap = false;
-    this.physicsWorld.world.bodies.forEach((b) => {
-      if (placeAABB.overlaps(b.aabb)) {
-        overlap = true;
-      }
-    });
-    if (overlap) return false;
-
-    // 2. Check Support (Raycast)
-    // Wood blocks can be placed in air
-    if (itemId === "wood_block_321" || itemId === "crossbow") return true;
-
-    if (itemId === "spikes") {
-      // Check if there is a body directly below
-      // Raycast down from center
-      const start = new CANNON.Vec3(position.x, position.y, position.z);
-      const end = new CANNON.Vec3(position.x, position.y - 1.0, position.z);
-
-      const result = new CANNON.RaycastResult();
-      this.physicsWorld.world.raycastClosest(
-        start,
-        end,
-        {
-          collisionFilterMask: -1,
-          skipBackfaces: true,
-        },
-        result
-      );
-
-      return result.hasHit;
-    }
-
-    return false;
-  }
-
-  private setState(newState: GameState) {
-    if (this.state === newState) return;
-
-    this.state = newState;
-    this.uiManager.showMessage(`State: ${GameState[newState]}`);
-
-    if (newState === GameState.TITLE) {
-      // TITLE：相机正对抬高后的 UI 面板，距离适中
-      this.cameraLerpActive = false;
-      this.camera.position.set(0, 4, 4);
-      this.camera.lookAt(0, 4, -10);
-
-      this.uiManager.clearUI();
-      document.exitPointerLock();
-
-      // Reset scores and round counter
-      this.currentRound = 0;
-      this.lobbyPlayers.forEach((p) => {
-        (p as any).totalScore = 0;
-      });
-
-      this.clearLevel();
-
-      // Reset players
-      this.players.forEach((player, id) => {
-        if (id !== "local") {
-          this.scene.remove(player.rig.root);
-          this.physicsWorld.world.removeBody(player.body);
-        } else {
-          // Reset local player position and state
-          player.resetPosition(new CANNON.Vec3(0, 5, 0));
-          player.score = 0;
-        }
-      });
-      // Clear remote players but keep local
-      const localPlayer = this.players.get("local");
-      this.players.clear();
-      if (localPlayer) {
-        this.players.set("local", localPlayer);
-      }
-
-      this.uiManager.showTitleScreen(
-        (nickname) => {
-          // Host
-          this.myPlayerInfo.nickname = nickname;
-          this.myPlayerInfo.isHost = true;
-          this.myPlayerInfo.id = this.networkManager.getMyId();
-          this.networkManager.setHost(true);
-
-          // Add self to lobby
-          this.lobbyPlayers = [this.myPlayerInfo];
-
-          this.setState(GameState.LOBBY);
-        },
-        (nickname, hostId) => {
-          // Join
-          this.myPlayerInfo.nickname = nickname;
-          this.myPlayerInfo.isHost = false;
-          this.networkManager.connectToHost(hostId);
-
-          // Wait for connection...
-          this.networkManager.onPeerConnected = (_conn) => {
-            // Send Join Packet
-            this.networkManager.send(
-              {
-                t: PacketType.JOIN,
-                p: { nickname: nickname },
-              },
-              hostId
-            );
-          };
-        }
-      );
-    } else if (newState === GameState.LOBBY) {
-      // LOBBY：同样使用正对 UI 面板的视角
-      this.cameraLerpActive = false;
-      this.camera.position.set(0, 1.5, 6);
-      this.camera.lookAt(0, 1, 0);
-
-      // 隐藏地图
-      this.mapRoot.visible = false;
-
-      // 隐藏所有玩家模型
-      this.players.forEach((player) => {
-        player.rig.root.visible = false;
-      });
-
-      this.uiManager.clearUI();
-      this.clearLevel(); // Ensure level is cleared when returning to lobby
-      this.refreshLobbyUI();
-    } else if (newState === GameState.PICK) {
-      // 显示地图
-      this.mapRoot.visible = true;
-
-      // 显示所有玩家模型
-      this.players.forEach((player) => {
-        player.rig.root.visible = true;
-      });
-
-      this.uiManager.clearUI();
-      document.exitPointerLock();
-      this.resetPlayers();
-      this.gridHighlight.visible = false;
-      this.gridHighlightX.visible = false;
-      this.gridHighlightZ.visible = false;
-      this.gridHelper.visible = false;
-      this.partyBoxRoot.visible = true; // Show Party Box (一直可见直到 BUILD_VIEW)
-
-      // Reset Turn Tracking
-      this.playersFinishedTurn.clear();
-
-      // Reset selected item for new round
-      this.selectedItem = null;
-      this.buildRotation = 0;
-
-      // 从 TITLE/LOBBY 的机位 (0,4,4) 平移到更右侧一点，保持视角不变，只是把工具区放在 UI 右边
-      this.cameraLerpActive = false;
-      const titlePos = new THREE.Vector3(0, 4, 4);
-      const pickPos = new THREE.Vector3(11, 4, 4); // 再多向右平移一点
-
-      // 如果当前不是标题机位，就先瞬移过去，以避免奇怪的后撤
-      this.camera.position.copy(titlePos);
-      this.camera.lookAt(0, 4, -10);
-
-      // 再用 tween 做从 titlePos 到 pickPos 的平移
-      this.tweenCameraTo(pickPos, 1.0);
-      // 视线始终看向 UI 木牌中心，工具区自然出现在右侧
-      this.camera.lookAt(0, 4, -10);
-
-      // Host generates items
-      if (this.networkManager.isHostUser()) {
-        this.generatePartyBoxItems();
-      }
-    } else if (newState === GameState.BUILD_VIEW) {
-      this.partyBoxRoot.visible = false; // Hide Party Box
-      document.exitPointerLock();
-      this.gridHighlight.visible = false;
-      this.gridHighlightX.visible = false;
-      this.gridHighlightZ.visible = false;
-      this.gridHelper.visible = false; // No grid helper
-      // this.gridHelper.position.y = 8; // Move grid up
-
-      // Create Ghost
-      if (this.selectedItem) {
-        if (this.ghostObject) this.scene.remove(this.ghostObject);
-        this.ghostObject =
-          this.resources.models.get(this.selectedItem)?.clone() || null;
-        if (this.ghostObject) {
-          this.updateGhostRotation();
-
-          this.ghostObject.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-              child.material = child.material.clone();
-              child.material.transparent = true;
-              child.material.opacity = 0.5;
-            }
-          });
-          this.scene.add(this.ghostObject);
-        }
-      }
-
-      // Side-Top View：相机在地图上方的圆形轨道上
-      this.buildCameraAngle = 0;
-      this.cameraLerpActive = false;
-      const radius = 30;
-      const height = 20;
-      const centerX = 0;
-      const centerZ = 12.5;
-      this.camera.position.set(
-        centerX + Math.sin(this.buildCameraAngle) * radius,
-        height,
-        centerZ + Math.cos(this.buildCameraAngle) * radius
-      );
-      this.camera.lookAt(centerX, 1, centerZ);
-    } else if (newState === GameState.BUILD_PLACE) {
-      // Keep camera where it was in BUILD_VIEW
-      // Enable grid highlight
-      this.gridHighlight.visible = true;
-
-      this.buildHeight = 8; // Start from top
-    } else if (newState === GameState.COUNTDOWN) {
-      this.partyBoxRoot.visible = false;
-      this.gridHighlight.visible = false; // Hide highlight
-      this.gridHighlightX.visible = false;
-      this.gridHighlightZ.visible = false;
-      if (this.bombRangeIndicator) this.bombRangeIndicator.visible = false;
-
-      // Explode Bombs
-      const bombs: CANNON.Body[] = [];
-      this.physicsWorld.world.bodies.forEach((b) => {
-        if ((b as any).userData?.tag === "bomb") {
-          bombs.push(b);
-        }
-      });
-
-      bombs.forEach((bomb) => {
-        const range = 3;
-        const toRemove: CANNON.Body[] = [];
-        this.physicsWorld.world.bodies.forEach((b) => {
-          if (b !== bomb && b.position.distanceTo(bomb.position) < range) {
-            const userData = (b as any).userData;
-            // If no userData, assume it's a prop and remove it
-            // If userData exists, check tag
-            const tag = userData ? userData.tag : undefined;
-
-            if (tag !== "ground" && tag !== "player" && tag !== "goal") {
-              toRemove.push(b);
-            }
-          }
-        });
-
-        toRemove.forEach((b) => {
-          this.physicsWorld.world.removeBody(b);
-          const mesh = (b as any).meshReference;
-          if (mesh) this.scene.remove(mesh);
-        });
-
-        // Remove bomb itself
-        this.physicsWorld.world.removeBody(bomb);
-        const bombMesh = (bomb as any).meshReference;
-        if (bombMesh) this.scene.remove(bombMesh);
-      });
-
-      if (bombs.length > 0) this.uiManager.showMessage("BOOM!");
-
-      this.countdownTimer = 3.0;
-      document.body.requestPointerLock();
-      this.uiManager.showMessage("Get Ready! 3");
-
-      // 倒计时阶段：同样使用更高的俯视角，保证菜单不被 Start Zone 顶边影响
-      this.cameraLerpActive = false;
-      this.camera.position.set(0, 25, -15);
-      this.camera.lookAt(0, 1, 12.5);
-
-      this.playersFinishedTurn.clear(); // Reuse for RUN finished tracking
-    } else if (newState === GameState.SCORE) {
-      document.exitPointerLock();
-
-      // Camera stays at goal close-up for a moment before showing scores
-      this.camera.position.set(8, 6, 22);
-      this.camera.lookAt(0, 2, 25);
-
-      // Show all players again
-      this.players.forEach((player) => {
-        player.rig.root.visible = true;
-      });
-
-      // Delay showing the score screen by 2 seconds
-      setTimeout(() => {
-        // Host calculates and sends scores
-        if (this.networkManager.isHostUser()) {
-          const scores = this.calculateScores();
-
-          // Send scores to all clients first
-          this.networkManager.send({
-            t: PacketType.SHOW_SCORE,
-            p: { scores: scores },
-          });
-
-          // Show locally with callback to check win condition AFTER display
-          this.uiManager.showScoreScreen(scores, this.GOAL_SCORE, () => {
-            // Check Win Condition AFTER the score animation completes
-            const winner = scores.find((s) => s.current >= this.GOAL_SCORE);
-
-            if (winner) {
-              // 查找赢家的角色信息
-              const winnerPlayer = this.lobbyPlayers.find((p) => p.nickname === winner.nickname);
-              const winnerCharacter = winnerPlayer?.character || "chicken";
-
-              // 广播赢家信息给所有客户端
-              this.networkManager.send({
-                t: PacketType.GAME_WIN,
-                p: { nickname: winner.nickname, character: winnerCharacter },
-              });
-
-              // Game Over - Show Win Screen
-              this.uiManager.showWinScreen(winner.nickname, winnerCharacter, () => {
-                // Back to Lobby - Reset scores but keep players
-                this.lobbyPlayers.forEach((p) => {
-                  (p as any).totalScore = 0;
-                });
-                this.setState(GameState.LOBBY);
-              });
-            } else {
-              // Continue to next round
-              this.networkManager.send({ t: PacketType.START_GAME, p: {} });
-              this.startGame();
-            }
-          });
-        }
-      }, 2000);
-    }
-
-    if (
-      newState !== GameState.BUILD_VIEW &&
-      newState !== GameState.BUILD_PLACE
-    ) {
-      if (this.ghostObject) {
-        this.scene.remove(this.ghostObject);
-        this.ghostObject = null;
-      }
-      if (this.bombRangeIndicator) {
-        this.bombRangeIndicator.visible = false;
-      }
-      // Clear highlights
-      this.highlightedMeshes.forEach((color, mesh) => {
-        if ((mesh.material as any).color)
-          (mesh.material as any).color.setHex(color);
-      });
-      this.highlightedMeshes.clear();
-    }
-  }
-
-  private clearLevel() {
-    // Cleanup crossbows
-    this.crossbows.forEach((c) => c.cleanup());
-    this.crossbows = [];
-
-    const objectsToRemove: CANNON.Body[] = [];
-    this.physicsWorld.world.bodies.forEach((b) => {
-      const tag = (b as any).userData?.tag;
-      // Remove everything except ground, goal, and player
-      if (tag && tag !== "ground" && tag !== "goal" && tag !== "player") {
-        objectsToRemove.push(b);
-      }
-    });
-    objectsToRemove.forEach((b) => {
-      this.physicsWorld.world.removeBody(b);
-      const mesh = (b as any).meshReference;
-      if (mesh) this.scene.remove(mesh);
-    });
-  }
-
-  private resetPlayers() {
-    const playerCount = this.players.size;
-    if (playerCount === 0) return;
-    
-    // Start Zone 是 2x2 的区域，中心在 (0, 0, 0)
-    // 在 X 和 Z 方向均匀分布玩家，但保持在 -0.8 到 0.8 范围内
-    const spacing = Math.min(1.6 / Math.max(playerCount - 1, 1), 0.8);
-    let index = 0;
-    this.players.forEach((player) => {
-      // 横向分布，Z方向稍微错开
-      const offsetX = playerCount === 1 ? 0 : (index - (playerCount - 1) / 2) * spacing;
-      const offsetZ = (index % 2) * 0.3 - 0.15; // 微小的Z方向错开
-      player.resetPosition(new CANNON.Vec3(offsetX, 2, offsetZ));
-      // 立即同步可视模型位置，确保模型不会残留在上一轮结束位置
-      player.rig.updateFromBody(player.body);
-      index++;
-    });
-  }
-
-  private placeObject(
-    itemId: string,
-    position: THREE.Vector3,
-    rotationIndex: number = 0
-  ) {
-    let mesh: THREE.Group | undefined;
-    let body: CANNON.Body | undefined;
-
-    // Default Box Shape
-    let shape: CANNON.Shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
-    let offset = new CANNON.Vec3(0, 0, 0);
-    let mass = 0;
-    let tag = "block";
-
-    if (itemId === "wood_block_321") {
-      mesh = this.resources.models.get("wood_block_321")?.clone();
-      // 3x2x1
-      if (rotationIndex % 2 === 0) {
-        shape = new CANNON.Box(new CANNON.Vec3(1.5, 0.5, 1.0));
-      } else {
-        shape = new CANNON.Box(new CANNON.Vec3(1.0, 0.5, 1.5));
-      }
-    } else if (itemId === "spikes") {
-      mesh = this.resources.models.get("spikes")?.clone();
-      // Spikes: 1x1 base, height approx 0.5?
-      // Let's use a box that is slightly smaller than 1x1 to avoid clipping issues
-      // Half extents: 0.45, 0.25, 0.45 -> Size 0.9, 0.5, 0.9
-      shape = new CANNON.Box(new CANNON.Vec3(0.45, 0.25, 0.45));
-      tag = "trap";
-      // Adjust mesh position: The model might be centered.
-      // If we want it to sit on the floor, and position.y is center of grid cell (e.g. 0.5, 1.5)
-      // We might need to lower it if the model origin is at the bottom.
-      // But let's assume standard center origin for now.
-      // If the spikes are short, we might want to lower the body center.
-      // Grid cell center y=0.5. Floor is y=0.
-      // If body height is 0.5 (half 0.25), body center should be at y=0.25.
-      // So we might need to offset the body relative to the grid position.
-      // But placeObject uses mesh.position as base.
-      // Let's adjust mesh.position.y in the logic below if needed.
-      // Actually, let's just let it float at center for now, or adjust bodyY.
-    } else if (itemId === "crossbow") {
-      mesh = this.resources.models.get("crossbow")?.clone();
-      // Crossbow model scaled up 2x (2x2x2)
-      // Half extents: 1.0, 1.0, 1.0
-      shape = new CANNON.Box(new CANNON.Vec3(1.0, 1.0, 1.0));
-      tag = "block";
-    }
-
-    if (mesh) {
-      // Clone materials to ensure unique instances for highlighting
-      mesh.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (child.material) {
-            child.material = child.material.clone();
-          }
-        }
-      });
-
-      // Position is already final (includes yShift from ghost object)
-      // Note: position is Visual Position (y=0 for patches)
-      mesh.position.copy(position);
-
-      // Apply Rotations
-      mesh.rotation.set(0, 0, 0);
-
-      // User Rotation
-      const q = new THREE.Quaternion();
-      q.setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        (rotationIndex * Math.PI) / 2
-      );
-      mesh.applyQuaternion(q);
-
-      body = new CANNON.Body({ mass: mass });
-
-      // For directional items like Crossbow, we must sync body rotation
-      if (itemId === "crossbow") {
-        body.quaternion.set(q.x, q.y, q.z, q.w);
-      }
-
-      // Calculate Body Position
-      // If patch, Body center should be at Visual + halfHeight
-      let bodyY = mesh.position.y;
-
-      body.addShape(shape, offset);
-      body.position.set(mesh.position.x, bodyY, mesh.position.z);
-
-      console.log(
-        `Placed ${itemId} at mesh.y=${mesh.position.y.toFixed(
-          3
-        )}, body.y=${body.position.y.toFixed(3)}, halfHeight=${
-          (shape as CANNON.Box).halfExtents.y
-        }`
-      );
-
-      if (tag) (body as any).userData = { tag: tag, owner: "local" }; // Assign owner
-
-      // Attach mesh reference to body for easy removal
-      (body as any).meshReference = mesh;
-
-      // Set material
-      body.material = this.physicsWorld.world.defaultMaterial;
-
-      this.scene.add(mesh);
-      this.physicsWorld.world.addBody(body);
-
-      if (itemId === "crossbow") {
-        const arrowModel = this.resources.models.get("arrow");
-        if (arrowModel) {
-          const crossbow = new Crossbow(
-            mesh,
-            body,
-            arrowModel,
-            this.scene,
-            this.physicsWorld.world
-          );
-          this.crossbows.push(crossbow);
-        }
-      }
-    }
-  }
-
-  private calculateScores() {
-    const results: any[] = [];
-    
-    // Score constants
-    const GOAL_POINTS = 15;      // 终点得分
-    const SOLO_POINTS = 10;      // 独行得分
-    const FIRST_POINTS = 5;      // 第一得分
-    const TRAP_KILL_POINTS = 5;  // 陷阱得分
-    
-    // Count how many players reached goal
-    const winnersCount = this.finishOrder.length;
-    const totalPlayers = this.lobbyPlayers.length;
-    const allReachedGoal = winnersCount === totalPlayers && totalPlayers > 0;
-
-    this.lobbyPlayers.forEach((p) => {
-      const player =
-        p.id === this.networkManager.getMyId()
-          ? this.players.get("local")
-          : this.players.get(p.id);
-
-      if (player) {
-        // 分类记录每种得分
-        const scoreBreakdown: { type: string; points: number; color: string }[] = [];
-        
-        // 1. Goal points: If not everyone reached the goal, those who did get points
-        const reachedGoal = this.finishOrder.includes(p.id);
-        if (reachedGoal && !allReachedGoal) {
-          scoreBreakdown.push({ type: "Goal", points: GOAL_POINTS, color: "#4CAF50" });
-        }
-        
-        // 2. Solo points: If exactly one person reached the goal
-        if (winnersCount === 1 && this.finishOrder[0] === p.id) {
-          scoreBreakdown.push({ type: "Solo", points: SOLO_POINTS, color: "#2196F3" });
-        }
-        
-        // 3. First points: If more than one person reached the goal, first one gets bonus
-        if (winnersCount > 1 && this.finishOrder[0] === p.id) {
-          scoreBreakdown.push({ type: "First", points: FIRST_POINTS, color: "#FF9800" });
-        }
-        
-        // 4. Trap points: Points for each kill
-        const kills = this.trapKills.get(p.id) || 0;
-        if (kills > 0) {
-          scoreBreakdown.push({ type: "Trap", points: kills * TRAP_KILL_POINTS, color: "#E91E63" });
-        }
-
-        // 计算总新增分数
-        const added = scoreBreakdown.reduce((sum, s) => sum + s.points, 0);
-
-        // Update total score
-        if (!(p as any).totalScore) (p as any).totalScore = 0;
-        (p as any).totalScore += added;
-
-        results.push({
-          nickname: p.nickname,
-          current: (p as any).totalScore,
-          added: added,
-          breakdown: scoreBreakdown, // 分类得分明细
-        });
-      }
-    });
-    
-    // Clear round tracking data
-    this.finishOrder = [];
-    this.trapKills.clear();
-
-    return results;
-  }
-
-  // 简单的摄像机位置插值：在给定时间内从当前点平滑移动到目标点
-  private tweenCameraTo(target: THREE.Vector3, duration: number = 0.8) {
-    this.cameraLerpActive = true;
-    this.cameraLerpStart.copy(this.camera.position);
-    this.cameraLerpEnd.copy(target);
-    this.cameraLerpT = 0;
-    this.cameraLerpDuration = duration;
-  }
-
-  private init() {
-    // 将 mapRoot 添加到 scene（用于在 LOBBY 状态隐藏整个地图）
-    this.scene.add(this.mapRoot);
-
-    // Sky：改为轻微竖向渐变的卡通天空色（通过雾和环境色统一）
-    this.scene.background = new THREE.Color(0x6fb1ff); // 稍深一点的卡通蓝
-
-    // 配合淡色雾，让远处和 UI 背板的颜色更统一，不会出现上深下浅的强烈分层
-    this.scene.fog = new THREE.Fog(0x8fd2ff, 60, 140);
-
-    // Clouds
-    const cloudModel = this.resources.models.get("cloud");
-    for (let i = 0; i < 15; i++) {
-      let cloud: THREE.Group;
-      if (cloudModel) {
-        cloud = cloudModel.clone();
-      } else {
-        cloud = PlaceholderGenerator.createCloud();
-      }
-
-      cloud.position.set(
-        (Math.random() - 0.5) * 100,
-        -10 + Math.random() * 5, // Below player (y=-10 to -5)
-        (Math.random() - 0.5) * 60
-      );
-      
-      // Random rotation for variety
-      cloud.rotation.y = Math.random() * Math.PI * 2;
-      // Slight random tilt
-      cloud.rotation.z = (Math.random() - 0.5) * 0.2;
-
-      // Random scale
-      // Base size is around 3x3x3, we vary it to create different cloud shapes
-      const scale = 0.8 + Math.random() * 1.2;
-      // Non-uniform scaling for more variety
-      cloud.scale.set(
-        scale * (0.8 + Math.random() * 0.4), 
-        scale * (0.8 + Math.random() * 0.4), 
-        scale * (0.8 + Math.random() * 0.4)
-      );
-      
-      this.scene.add(cloud);
-      this.clouds.push(cloud);
-    }
-
-    // Lights (Brighter)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    this.scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
-    directionalLight.position.set(20, 15, 10); // 斜向光照：降低高度，增加水平偏移，使阴影更明显
-    directionalLight.castShadow = true;
-    directionalLight.shadow.camera.near = 0.1;
-    directionalLight.shadow.camera.far = 50;
-    directionalLight.shadow.mapSize.width = 4096;
-    directionalLight.shadow.mapSize.height = 4096;
-    directionalLight.shadow.bias = -0.0005;
-    this.scene.add(directionalLight);
-
-    // --- Level Setup ---
-
-    // 1. Start Platform (Height 0, Surface 0)
-    // Box Height 2 -> Center y=-1 -> Top y=0
-    const startPlatBody = BodyFactory.createBox(
-      10,
-      2,
-      10,
-      0,
-      new CANNON.Vec3(0, -1, 0)
-    );
-    (startPlatBody as any).userData = { tag: "ground" };
-    this.physicsWorld.world.addBody(startPlatBody);
-
-    const platformModel = this.resources.models.get("platform");
-    let startPlatMesh: THREE.Object3D;
-
-    if (platformModel) {
-      startPlatMesh = platformModel.clone();
-      // Assuming model origin is at center
-      startPlatMesh.position.set(0, -0.45, 0);
-    } else {
-      const startPlatGeo = new THREE.BoxGeometry(10, 2, 10);
-      const startPlatMat = new THREE.MeshStandardMaterial({
-        map: this.resources.textures.get("default_grid"),
-        color: 0x888888,
-      });
-      startPlatMesh = new THREE.Mesh(startPlatGeo, startPlatMat);
-      startPlatMesh.position.y = -1;
-    }
-
-    startPlatMesh.receiveShadow = true;
-    this.mapRoot.add(startPlatMesh);
-    (startPlatBody as any).meshReference = startPlatMesh;
-
-    // 2. Goal Platform (Height 2, Surface 2)
-    // Box Height 2 -> Center y=1 -> Top y=2
-    // Offset in Z to create a gap
-    const goalPlatBody = BodyFactory.createBox(
-      10,
-      2,
-      10,
-      0,
-      new CANNON.Vec3(0, 1, 25)
-    );
-    (goalPlatBody as any).userData = { tag: "ground" };
-    this.physicsWorld.world.addBody(goalPlatBody);
-
-    let goalPlatMesh: THREE.Object3D;
-    if (platformModel) {
-      goalPlatMesh = platformModel.clone();
-      goalPlatMesh.position.set(0, 1.55, 25);
-    } else {
-      const goalPlatGeo = new THREE.BoxGeometry(10, 2, 10);
-      const goalPlatMat = new THREE.MeshStandardMaterial({
-        map: this.resources.textures.get("default_grid"),
-        color: 0x888888,
-      });
-      goalPlatMesh = new THREE.Mesh(goalPlatGeo, goalPlatMat);
-      goalPlatMesh.position.set(0, 1, 25);
-    }
-
-    goalPlatMesh.receiveShadow = true;
-    this.mapRoot.add(goalPlatMesh);
-    (goalPlatBody as any).meshReference = goalPlatMesh;
-
-    // 3. Gap Spikes (Removed)
-
-    // 4. Zones
-    // Start Zone (Blue)
-    const startZone = PlaceholderGenerator.createZone(2, 2, 2, 0x0000ff);
-    startZone.position.set(0, 1, 0); // On Start Platform (y=0) -> Zone center y=1
-    this.mapRoot.add(startZone);
-
-    // Goal Zone (Red) - On Goal Platform
-    const goalZone = PlaceholderGenerator.createZone(2, 2, 2, 0xff0000);
-    goalZone.position.set(0, 3, 25); // Platform y=2 -> Zone center y=3
-    this.mapRoot.add(goalZone);
-
-    // 5. Goal Flag
-    const flagGroup = PlaceholderGenerator.createFlag();
-    flagGroup.position.set(0, 2, 25);
-    this.mapRoot.add(flagGroup);
-
-    // Goal Physics (Trigger)
-    const goalBody = BodyFactory.createBox(
-      1,
-      2,
-      1,
-      0,
-      new CANNON.Vec3(0, 3, 25)
-    );
-    goalBody.isTrigger = true;
-    (goalBody as any).userData = { tag: "goal" };
-    this.physicsWorld.world.addBody(goalBody);
-
-    // --- Party Box Area（起点右前方，让空间连在一起）---
-    const boxPos = new THREE.Vector3(12, 0, -6);
-
-    // Box Container
-    const openBox = PlaceholderGenerator.createOpenBox();
-    openBox.position.copy(boxPos);
-    this.partyBoxRoot.add(openBox); // Add to root
-
-    // Selectable Items
-    // Initial items are now handled by generatePartyBoxItems in PICK state
-    // const items = ['box_wood', 'spikes', 'spring', 'honey', 'ice', 'plank', 'ramp', 'black_hole', 'turret', 'coin', 'bomb', 'conveyor'];
-    // items.forEach((id) => { ... });
-
-    // --- Player ---
+  private init(): void {
+    // 创建本地玩家
     const appearance = getCharacterAppearance("chicken");
     const rig = CharacterRig.createFromAppearance(this.resources, appearance);
     this.scene.add(rig.root);
 
-    // Use Capsule (Two Spheres) for better collision (Head + Feet)
-    // Radius 0.4, Height 1.2 (approx character height)
     const playerBody = BodyFactory.createPlayerBody(
       0.4,
       1.2,
@@ -1819,376 +174,1007 @@ export class Game {
     this.loop.start();
   }
 
-  private update() {
-    this.physicsWorld.step(1 / 60);
+  private setupChatSystem(): void {
+    this.uiManager.setChatCallback((message: string) => {
+      const chatPayload: ChatPayload = {
+        nickname: this.myPlayerInfo.nickname,
+        message: message,
+      };
 
-    // Update Crossbows
-    this.crossbows.forEach((crossbow) => {
-      crossbow.update(1 / 60);
-    });
-
-    // Sync Players FIRST (so rig is at correct position for camera)
-    this.players.forEach((player) => {
-      player.update(1 / 60);
-    });
-
-    // Camera tween（只影响位置，不改朝向）
-    if (this.cameraLerpActive) {
-      this.cameraLerpT += 1 / 60;
-      const t = Math.min(this.cameraLerpT / this.cameraLerpDuration, 1);
-      this.camera.position.lerpVectors(
-        this.cameraLerpStart,
-        this.cameraLerpEnd,
-        t
-      );
-      if (t >= 1) this.cameraLerpActive = false;
-    }
-
-    // Update Clouds
-    this.clouds.forEach((cloud) => {
-      cloud.position.x += 0.02;
-      if (cloud.position.x > 60) {
-        cloud.position.x = -60;
-      }
-    });
-
-    // Update Lobby character animations
-    if (this.state === GameState.LOBBY) {
-      this.uiManager.updateLobbyAnimations(1 / 60);
-    }
-
-    // Rotate Party Box Items
-    if (this.state === GameState.PICK) {
-      this.partyBoxItems.forEach((item) => {
-        item.rotation.y += 0.01;
+      this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
+      this.networkManager.send({
+        t: PacketType.CHAT,
+        p: chatPayload,
       });
-    }
+    });
 
-    // Countdown Logic
-    if (this.state === GameState.COUNTDOWN) {
-      this.countdownTimer -= 1 / 60;
-      if (this.countdownTimer <= 0) {
-        this.setState(GameState.RUN);
-      } else {
-        this.uiManager.showMessage(
-          `Get Ready! ${Math.ceil(this.countdownTimer)}`
-        );
-        // Clamp Player to Start Zone
-        const localPlayer = this.players.get("local");
-        if (localPlayer) {
-          // Start Zone is at 0,1,0 with size 2x2x2. Bounds: x[-1,1], z[-1,1]
-          if (localPlayer.body.position.x < -1)
-            localPlayer.body.position.x = -1;
-          if (localPlayer.body.position.x > 1) localPlayer.body.position.x = 1;
-          if (localPlayer.body.position.z < -1)
-            localPlayer.body.position.z = -1;
-          if (localPlayer.body.position.z > 1) localPlayer.body.position.z = 1;
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !this.uiManager.isChatInputOpen()) {
+        if (this.state !== GameState.TITLE) {
+          e.preventDefault();
+          this.uiManager.openChatInput();
         }
       }
-    }
+    });
+  }
 
-    // Handle Input & Camera for Local Player
-    if (this.state === GameState.RUN || this.state === GameState.COUNTDOWN) {
-      const localPlayer = this.players.get("local");
-      if (localPlayer) {
-        // Check if spectating
-        if (
-          this.state === GameState.RUN &&
-          this.playersFinishedTurn.has(this.networkManager.getMyId())
-        ) {
-          // Spectator Mode Controls
-          const speed = 0.5;
-          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
-            this.camera.quaternion
-          );
-          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(
-            this.camera.quaternion
-          );
+  // ========== 事件处理 ==========
 
-          // Flatten for movement (optional, but free cam usually allows 3D movement)
-          // Let's keep it free 3D movement
+  private setupEvents(): void {
+    window.addEventListener("mousemove", (event) => {
+      this.uiManager.updatePointerFromMouse(
+        event.clientX,
+        event.clientY,
+        window.innerWidth,
+        window.innerHeight
+      );
 
-          if (this.inputManager.isKeyPressed("KeyW"))
-            this.camera.position.add(forward.multiplyScalar(speed));
-          if (this.inputManager.isKeyPressed("KeyS"))
-            this.camera.position.sub(forward.multiplyScalar(speed));
-          if (this.inputManager.isKeyPressed("KeyD"))
-            this.camera.position.add(right.multiplyScalar(speed));
-          if (this.inputManager.isKeyPressed("KeyA"))
-            this.camera.position.sub(right.multiplyScalar(speed));
-          if (this.inputManager.isKeyPressed("Space"))
-            this.camera.position.y += speed;
-          if (this.inputManager.isKeyPressed("ShiftLeft"))
-            this.camera.position.y -= speed;
+      this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-          // Rotation is handled by mousemove event updating buildCameraAngle?
-          // Wait, in setupEvents, mousemove updates buildCameraAngle ONLY if state is BUILD_VIEW or (RUN && finished).
-          // But buildCameraAngle logic there is:
-          // this.camera.position.x = Math.sin(this.buildCameraAngle) * radius;
-          // This is ORBIT logic. We want FREE LOOK logic for spectator.
-
-          // We need to change the mousemove handler to support free look for spectator.
-        } else {
-          // 1. Handle Camera Rotation (Mouse)
-          const mouseDelta = this.inputManager.getMouseDelta();
-          if (document.pointerLockElement) {
-            this.cameraAngleY -= mouseDelta.x * 0.002;
-            this.cameraAngleX += mouseDelta.y * 0.002;
-
-            // Clamp vertical angle
-            this.cameraAngleX = Math.max(
-              -Math.PI / 3,
-              Math.min(Math.PI / 3, this.cameraAngleX)
-            );
-          }
-
-          // 2. Handle Movement (WASD + Jump)
-          const input = {
-            x: this.inputManager.getAxis("KeyA", "KeyD"),
-            y: this.inputManager.getAxis("KeyW", "KeyS"),
-            jump: this.inputManager.isKeyPressed("Space"),
-            sprint:
-              this.inputManager.isKeyPressed("ShiftLeft") ||
-              this.inputManager.isKeyPressed("ShiftRight"),
-          };
-          localPlayer.setInput(input, this.cameraAngleY);
-
-          // 3. Update Camera Position (Orbit around player)
-          const targetPos = new THREE.Vector3();
-          localPlayer.rig.root.getWorldPosition(targetPos);
-          targetPos.y += 1.5; // Look at head height
-
-          const offsetX =
-            Math.sin(this.cameraAngleY) *
-            Math.cos(this.cameraAngleX) *
-            this.cameraDistance;
-          const offsetZ =
-            Math.cos(this.cameraAngleY) *
-            Math.cos(this.cameraAngleX) *
-            this.cameraDistance;
-          const offsetY = Math.sin(this.cameraAngleX) * this.cameraDistance;
-
-          this.camera.position.set(
-            targetPos.x + offsetX,
-            targetPos.y + offsetY,
-            targetPos.z + offsetZ
-          );
-          this.camera.lookAt(targetPos);
-        }
-
-        // 4. Check Death / Win (Only in RUN)
-        if (this.state === GameState.RUN) {
-          if (!this.playersFinishedTurn.has(this.networkManager.getMyId())) {
-            if (localPlayer.checkDeath() || localPlayer.hasWon) {
-              // Finished
-              this.playersFinishedTurn.add(this.networkManager.getMyId());
-              this.uiManager.showMessage(
-                localPlayer.hasWon ? "GOAL!" : "DIED!"
-              );
-
-              // 如果到达终点，播放 dance 动画
-              if (localPlayer.hasWon) {
-                localPlayer.setAnimState("dance");
-              }
-
-              // Send Finished Packet immediately
-              this.networkManager.send({
-                t: PacketType.PLAYER_FINISHED_RUN,
-                p: { 
-                  won: localPlayer.hasWon,
-                  killedBy: localPlayer.lastHitBy 
-                },
-              });
-              
-              // Track locally for host
-              if (this.networkManager.isHostUser()) {
-                if (localPlayer.hasWon && !this.finishOrder.includes(this.networkManager.getMyId())) {
-                  this.finishOrder.push(this.networkManager.getMyId());
-                }
-                if (localPlayer.lastHitBy && localPlayer.lastHitBy !== this.networkManager.getMyId()) {
-                  const currentKills = this.trapKills.get(localPlayer.lastHitBy) || 0;
-                  this.trapKills.set(localPlayer.lastHitBy, currentKills + 1);
-                }
-              }
-
-              // Delay camera switch by 2 seconds for death animation
-              const delay = localPlayer.hasWon ? 0 : 2000;
-              setTimeout(() => {
-                // Switch to Goal Area Close-up View
-                document.exitPointerLock();
-                this.camera.position.set(8, 6, 22);
-                this.camera.lookAt(0, 2, 25);
-
-                // If Host, check if everyone finished (including self)
-                if (this.networkManager.isHostUser()) {
-                  if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
-                    this.setState(GameState.SCORE);
-                  }
-                }
-              }, delay);
-            }
-          }
-        }
-      }
-    } else if (
-      this.state === GameState.BUILD_VIEW ||
-      this.state === GameState.BUILD_PLACE
-    ) {
-      // Ghost update handled in events
-      if (
-        this.state === GameState.BUILD_PLACE &&
-        this.ghostObject &&
-        this.selectedItem
+      if (this.state === GameState.BUILD_VIEW) {
+        this.cameraController.updateBuildViewCamera(event.movementX);
+      } else if (
+        this.state === GameState.RUN &&
+        !this.playersFinishedTurn.has(this.networkManager.getMyId())
       ) {
-        const isValid = this.isValidPlacement(
-          this.selectedItem,
-          this.ghostObject.position
+        if (event.buttons === 1 || event.buttons === 2) {
+          this.cameraController.handleFreeLook(event.movementX, event.movementY);
+        }
+      } else if (this.state === GameState.BUILD_PLACE) {
+        this.buildSystem.updateGhostPositionFromMouse(
+          this.raycaster,
+          this.mouse,
+          this.camera
         );
-        this.ghostObject.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            // Clone material if not already unique to avoid affecting other objects?
-            // In setState we already cloned it: child.material = child.material.clone();
-            // But we need to make sure we are setting the color on the material instance of the ghost.
-            // Assuming standard material or basic material.
-            if ((child.material as any).color) {
-              (child.material as any).color.setHex(
-                isValid ? 0xffffff : 0xff0000
-              );
-            }
+        this.buildSystem.updateBombIndicator();
+      }
+    });
+
+    window.addEventListener("wheel", (event) => {
+      if (this.state === GameState.BUILD_PLACE) {
+        this.buildSystem.adjustHeight(event.deltaY > 0 ? -1 : 1);
+      }
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        if (this.state === GameState.BUILD_PLACE) {
+          this.setState(GameState.BUILD_VIEW);
+        }
+      } else if (event.code === "KeyQ") {
+        if (this.state === GameState.BUILD_PLACE) {
+          this.buildSystem.rotate();
+          this.buildSystem.updateGhostPositionFromMouse(
+            this.raycaster,
+            this.mouse,
+            this.camera
+          );
+        }
+      }
+    });
+
+    window.addEventListener("mousedown", () => {
+      this.uiManager.handlePointerDown();
+    });
+
+    window.addEventListener("click", () => {
+      const consumed = this.uiManager.handleClick();
+      if (consumed) return;
+
+      if (this.state === GameState.PICK) {
+        this.handlePickClick();
+      } else if (this.state === GameState.BUILD_VIEW) {
+        this.setState(GameState.BUILD_PLACE);
+      } else if (this.state === GameState.BUILD_PLACE) {
+        this.handleBuildPlaceClick();
+      } else if (
+        this.state === GameState.RUN ||
+        this.state === GameState.COUNTDOWN
+      ) {
+        document.body.requestPointerLock();
+      }
+    });
+  }
+
+  private handlePickClick(): void {
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const intersects = this.raycaster.intersectObjects(
+      this.partyBoxManager.getItems(),
+      true
+    );
+
+    if (intersects.length > 0) {
+      let target = intersects[0].object;
+      while (target.parent && !target.userData.itemId) {
+        target = target.parent;
+      }
+
+      if (target.userData.itemId) {
+        const index = this.partyBoxManager.findItemIndex(target);
+        if (index !== -1) {
+          if (this.networkManager.isHostUser()) {
+            this.processPickRequest(index, this.networkManager.getMyId());
+          } else {
+            this.networkManager.send({
+              t: PacketType.PICK_ITEM,
+              p: { index: index },
+            });
           }
-        });
+        }
       }
     }
+  }
 
-    // Send Snapshot
-    if (this.state === GameState.RUN || this.state === GameState.COUNTDOWN) {
-      const localPlayer = this.players.get("local");
-      if (localPlayer && this.networkManager.getMyId()) {
+  private handleBuildPlaceClick(): void {
+    if (
+      this.buildSystem.ghostObject &&
+      this.buildSystem.selectedItem
+    ) {
+      if (
+        this.buildSystem.isValidPlacement(
+          this.buildSystem.selectedItem,
+          this.buildSystem.ghostObject.position
+        )
+      ) {
+        const crossbow = this.buildSystem.placeObject(
+          this.buildSystem.selectedItem,
+          this.buildSystem.ghostObject.position,
+          this.buildSystem.rotation
+        );
+
+        if (crossbow) {
+          this.crossbows.push(crossbow);
+        }
+
+        this.playersFinishedTurn.add(this.networkManager.getMyId());
+
         this.networkManager.send({
-          t: PacketType.SNAPSHOT,
+          t: PacketType.EVENT_PLACE,
           p: {
-            id: this.networkManager.getMyId(),
-            pos: [
-              localPlayer.body.position.x,
-              localPlayer.body.position.y,
-              localPlayer.body.position.z,
-            ],
-            rot: [
-              localPlayer.body.quaternion.x,
-              localPlayer.body.quaternion.y,
-              localPlayer.body.quaternion.z,
-              localPlayer.body.quaternion.w,
-            ],
-            anim: "idle",
+            itemId: this.buildSystem.selectedItem,
+            pos: {
+              x: this.buildSystem.ghostObject.position.x,
+              y: this.buildSystem.ghostObject.position.y,
+              z: this.buildSystem.ghostObject.position.z,
+            },
+            rot: this.buildSystem.rotation,
+            playerId: this.networkManager.getMyId(),
           },
         });
+
+        this.checkAllPlayersFinished();
+
+        if (this.state === GameState.BUILD_PLACE) {
+          this.uiManager.showMessage("Waiting for other players...");
+          this.buildSystem.removeGhost();
+          this.buildSystem.setHighlightVisible(false);
+        }
+      } else {
+        this.uiManager.showMessage("Invalid Placement!");
       }
     }
-
-    this.renderer.render(this.scene, this.camera);
   }
 
-  private generatePartyBoxItems() {
-    const allItems = ["wood_block_321", "spikes", "crossbow"];
-    const numItems = this.lobbyPlayers.length + 2;
-    const selectedItems: any[] = [];
-    // 与 init 中 Party Box 所在位置保持一致
-    const boxPos = new THREE.Vector3(12, 0, -6);
+  // ========== 网络处理 ==========
 
-    // Increment round counter
-    this.currentRound++;
+  private setupNetworkHandlers(): void {
+    this.networkManager.onIdAssigned = (id) => {
+      this.myPlayerInfo.id = id;
+      if (this.state === GameState.LOBBY) {
+        this.refreshLobbyUI();
+      }
+    };
 
-    // First round: ensure at least one wood_block_321
-    let guaranteedBlock = false;
-    if (this.currentRound === 1) {
-      const xOffset = (Math.random() - 0.5) * 10;
-      const zOffset = (Math.random() - 0.5) * 6;
-      const yRot = Math.random() * Math.PI * 2;
-      selectedItems.push({
-        id: "wood_block_321",
-        pos: [boxPos.x + xOffset, boxPos.y + 0.5, boxPos.z + zOffset],
-        rot: yRot,
-      });
-      guaranteedBlock = true;
+    this.networkManager.onPacketReceived = (
+      packet: Packet,
+      senderId: string
+    ) => {
+      switch (packet.t) {
+        case PacketType.JOIN:
+          this.handleJoinPacket(packet, senderId);
+          break;
+        case PacketType.WELCOME:
+          this.handleWelcomePacket(packet);
+          break;
+        case PacketType.LOBBY_UPDATE:
+          this.handleLobbyUpdatePacket(packet);
+          break;
+        case PacketType.CHARACTER_SELECT:
+          this.handleCharacterSelectPacket(packet, senderId);
+          break;
+        case PacketType.START_GAME:
+          if (!this.networkManager.isHostUser()) this.startGame();
+          break;
+        case PacketType.SNAPSHOT:
+          this.handleSnapshot(packet.p);
+          if (this.networkManager.isHostUser()) {
+            this.networkManager.send(packet);
+          }
+          break;
+        case PacketType.EVENT_PLACE:
+          this.handleEventPlacePacket(packet, senderId);
+          break;
+        case PacketType.PARTY_BOX_UPDATE:
+          this.partyBoxManager.spawnItems(packet.p);
+          break;
+        case PacketType.PICK_ITEM:
+          if (this.networkManager.isHostUser()) {
+            this.processPickRequest(packet.p.index, senderId);
+          }
+          break;
+        case PacketType.ITEM_PICKED:
+          this.handleItemPicked(packet.p.index, packet.p.playerId);
+          break;
+        case PacketType.PLAYER_FINISHED_RUN:
+          this.handlePlayerFinishedRun(packet, senderId);
+          break;
+        case PacketType.SHOW_SCORE:
+          if (!this.networkManager.isHostUser()) {
+            this.setState(GameState.SCORE);
+            this.uiManager.showScoreScreen(
+              packet.p.scores,
+              ScoreManager.GOAL_SCORE,
+              () => {}
+            );
+          }
+          break;
+        case PacketType.GAME_WIN:
+          if (!this.networkManager.isHostUser()) {
+            this.uiManager.showWinScreen(
+              packet.p.nickname,
+              packet.p.character,
+              () => {
+                this.lobbyPlayers.forEach((p) => {
+                  (p as any).totalScore = 0;
+                });
+                this.setState(GameState.LOBBY);
+              }
+            );
+          }
+          break;
+        case PacketType.CHAT:
+          const chatPayload = packet.p as ChatPayload;
+          this.uiManager.addChatMessage(
+            chatPayload.nickname,
+            chatPayload.message
+          );
+          if (this.networkManager.isHostUser()) {
+            this.networkManager.send(packet);
+          }
+          break;
+      }
+    };
+  }
+
+  private handleJoinPacket(packet: Packet, senderId: string): void {
+    if (!this.networkManager.isHostUser()) return;
+    if (this.lobbyPlayers.some((p) => p.id === senderId)) return;
+
+    const newPlayer: PlayerInfo = {
+      id: senderId,
+      nickname: packet.p.nickname,
+      character: "",
+      isHost: false,
+      isReady: false,
+    };
+    this.lobbyPlayers.push(newPlayer);
+
+    this.networkManager.send(
+      {
+        t: PacketType.WELCOME,
+        p: {
+          players: this.lobbyPlayers,
+          state: this.state,
+        },
+      },
+      senderId
+    );
+
+    this.broadcastLobbyUpdate();
+  }
+
+  private handleWelcomePacket(packet: Packet): void {
+    this.lobbyPlayers = packet.p.players;
+    this.myPlayerInfo.id = this.networkManager.getMyId();
+
+    const myProfile = this.lobbyPlayers.find(
+      (p) => p.id === this.myPlayerInfo.id
+    );
+    if (myProfile && myProfile.character) {
+      this.updateLocalPlayerModel(myProfile.character);
     }
 
-    const remainingItems = guaranteedBlock ? numItems - 1 : numItems;
-    for (let i = 0; i < remainingItems; i++) {
-      const id = allItems[Math.floor(Math.random() * allItems.length)];
-      const xOffset = (Math.random() - 0.5) * 10;
-      const zOffset = (Math.random() - 0.5) * 6;
-      const yRot = Math.random() * Math.PI * 2;
+    this.setState(GameState.LOBBY);
+  }
 
-      selectedItems.push({
-        id: id,
-        pos: [boxPos.x + xOffset, boxPos.y + 0.5, boxPos.z + zOffset],
-        rot: yRot,
-      });
+  private handleLobbyUpdatePacket(packet: Packet): void {
+    this.lobbyPlayers = packet.p;
+    const me = this.lobbyPlayers.find(
+      (p) => p.id === this.networkManager.getMyId()
+    );
+    if (me && me.character) {
+      this.updateLocalPlayerModel(me.character);
+    }
+    this.refreshLobbyUI();
+  }
+
+  private handleCharacterSelectPacket(packet: Packet, senderId: string): void {
+    if (!this.networkManager.isHostUser()) return;
+
+    const requestedChar = packet.p.charId;
+    const sender = this.lobbyPlayers.find((pl) => pl.id === senderId);
+
+    if (sender) {
+      const isTaken = this.lobbyPlayers.some(
+        (p) => p.character === requestedChar && p.id !== senderId
+      );
+
+      if (!isTaken) {
+        sender.character = requestedChar;
+      }
+      this.broadcastLobbyUpdate();
+    }
+  }
+
+  private handleEventPlacePacket(packet: Packet, _senderId: string): void {
+    if (packet.p.playerId === this.networkManager.getMyId()) return;
+
+    const crossbow = this.buildSystem.placeObject(
+      packet.p.itemId,
+      new THREE.Vector3(packet.p.pos.x, packet.p.pos.y, packet.p.pos.z),
+      packet.p.rot || 0
+    );
+
+    if (crossbow) {
+      this.crossbows.push(crossbow);
     }
 
-    // Spawn locally
-    this.spawnPartyBoxItems(selectedItems);
+    this.playersFinishedTurn.add(packet.p.playerId);
+    this.checkAllPlayersFinished();
 
-    // Broadcast
+    if (this.networkManager.isHostUser()) {
+      this.networkManager.send(packet);
+    }
+  }
+
+  private handlePlayerFinishedRun(packet: Packet, senderId: string): void {
+    if (!this.networkManager.isHostUser()) return;
+    if (senderId === this.networkManager.getMyId()) return;
+
+    this.playersFinishedTurn.add(senderId);
+
+    if (packet.p.won) {
+      this.scoreManager.recordFinish(senderId);
+    }
+
+    if (packet.p.killedBy && packet.p.killedBy !== senderId) {
+      this.scoreManager.recordTrapKill(packet.p.killedBy);
+    }
+
+    if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
+      this.setState(GameState.SCORE);
+    }
+  }
+
+  private handleSnapshot(data: SnapshotPayload): void {
+    if (data.id === this.networkManager.getMyId()) return;
+    const player = this.players.get(data.id);
+    if (player) {
+      player.body.position.set(data.pos[0], data.pos[1], data.pos[2]);
+      player.body.quaternion.set(
+        data.rot[0],
+        data.rot[1],
+        data.rot[2],
+        data.rot[3]
+      );
+      player.rig.updateFromBody(player.body);
+    }
+  }
+
+  // ========== 游戏逻辑 ==========
+
+  private updateLocalPlayerModel(characterId: string): void {
+    const localPlayer = this.players.get("local");
+    if (!localPlayer) return;
+
+    const appearance = getCharacterAppearance(characterId);
+    this.scene.remove(localPlayer.rig.root);
+
+    const newRig = CharacterRig.createFromAppearance(this.resources, appearance);
+    this.scene.add(newRig.root);
+
+    if (this.state === GameState.LOBBY) {
+      newRig.root.visible = false;
+    }
+
+    localPlayer.rig = newRig;
+    newRig.updateFromBody(localPlayer.body);
+  }
+
+  private broadcastLobbyUpdate(): void {
     this.networkManager.send({
-      t: PacketType.PARTY_BOX_UPDATE,
-      p: selectedItems,
+      t: PacketType.LOBBY_UPDATE,
+      p: this.lobbyPlayers,
     });
+    this.refreshLobbyUI();
   }
 
-  private spawnPartyBoxItems(items: any[]) {
-    // Clear existing
-    this.partyBoxItems.forEach((item) => this.partyBoxRoot.remove(item));
-    this.partyBoxItems = [];
-    this.availableItems.clear();
+  private refreshLobbyUI(): void {
+    if (this.state === GameState.LOBBY) {
+      this.uiManager.showLobbyScreen(
+        this.networkManager.getMyId(),
+        this.lobbyPlayers,
+        this.networkManager.isHostUser(),
+        (charId) => {
+          if (this.networkManager.isHostUser()) {
+            const isTaken = this.lobbyPlayers.some(
+              (p) => p.character === charId && p.id !== this.myPlayerInfo.id
+            );
+            if (!isTaken) {
+              this.myPlayerInfo.character = charId;
+              const me = this.lobbyPlayers.find(
+                (p) => p.id === this.myPlayerInfo.id
+              );
+              if (me) me.character = charId;
+              this.updateLocalPlayerModel(charId);
+              this.broadcastLobbyUpdate();
+            }
+          } else {
+            this.networkManager.send({
+              t: PacketType.CHARACTER_SELECT,
+              p: { charId: charId },
+            });
+          }
+        },
+        () => {
+          const allReady = this.lobbyPlayers.every(
+            (p) => p.character && p.character !== ""
+          );
+          if (allReady) {
+            this.networkManager.send({ t: PacketType.START_GAME, p: {} });
+            this.startGame();
+          } else {
+            this.uiManager.showMessage("All players must select a character!");
+          }
+        }
+      );
+    }
+  }
 
-    items.forEach((data, index) => {
-      const mesh = this.resources.models.get(data.id)?.clone();
-      if (mesh) {
-        const container = new THREE.Group();
+  private startGame(): void {
+    this.uiManager.cleanupLobbyCharacters();
+    this.uiManager.clearUI();
 
-        container.add(mesh);
-        container.position.set(data.pos[0], data.pos[1], data.pos[2]);
-        container.rotation.y = data.rot;
-        container.userData = { itemId: data.id };
+    if (this.myPlayerInfo.character) {
+      this.updateLocalPlayerModel(this.myPlayerInfo.character);
+    }
 
-        this.partyBoxRoot.add(container); // Add to root
-        this.partyBoxItems.push(container);
-        this.availableItems.add(index.toString());
+    this.lobbyPlayers.forEach((p) => {
+      if (p.id !== this.myPlayerInfo.id && !this.players.has(p.id)) {
+        this.spawnRemotePlayer(p);
       }
     });
+
+    this.setState(GameState.PICK);
   }
 
-  private processPickRequest(index: number, senderId: string) {
-    if (this.availableItems.has(index.toString())) {
-      // Valid Pick
-      this.availableItems.delete(index.toString());
+  private spawnRemotePlayer(info: PlayerInfo): void {
+    const appearance = getCharacterAppearance(info.character);
+    const rig = CharacterRig.createFromAppearance(this.resources, appearance);
+    this.scene.add(rig.root);
 
-      // Broadcast to everyone (including self if loopback supported, but here we handle self manually)
+    const playerBody = BodyFactory.createPlayerBody(
+      0.4,
+      1.2,
+      0,
+      new CANNON.Vec3(0, 5, 0)
+    );
+    playerBody.type = CANNON.Body.KINEMATIC;
+    playerBody.collisionFilterGroup = 2;
+    playerBody.collisionFilterMask = 1;
+    (playerBody as any).userData = { tag: "player" };
+
+    this.physicsWorld.world.addBody(playerBody);
+
+    const player = new Player(rig, playerBody);
+    this.players.set(info.id, player);
+  }
+
+  private checkAllPlayersFinished(): void {
+    if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
+      this.setState(GameState.COUNTDOWN);
+    }
+  }
+
+  private resetPlayers(): void {
+    const playerCount = this.players.size;
+    if (playerCount === 0) return;
+
+    const spacing = Math.min(1.6 / Math.max(playerCount - 1, 1), 0.8);
+    let index = 0;
+    this.players.forEach((player) => {
+      const offsetX =
+        playerCount === 1 ? 0 : (index - (playerCount - 1) / 2) * spacing;
+      const offsetZ = (index % 2) * 0.3 - 0.15;
+      player.resetPosition(new CANNON.Vec3(offsetX, 2, offsetZ));
+      player.rig.updateFromBody(player.body);
+      index++;
+    });
+  }
+
+  private processPickRequest(index: number, senderId: string): void {
+    if (this.partyBoxManager.isItemAvailable(index)) {
+      this.partyBoxManager.markItemPicked(index);
+
       this.networkManager.send({
         t: PacketType.ITEM_PICKED,
         p: { index: index, playerId: senderId },
       });
 
-      // Handle locally immediately
       this.handleItemPicked(index, senderId);
     }
   }
 
-  private handleItemPicked(index: number, playerId: string) {
-    // Remove item visually
-    if (this.partyBoxItems[index]) {
-      this.partyBoxItems[index].visible = false;
-    }
+  private handleItemPicked(index: number, playerId: string): void {
+    this.partyBoxManager.markItemPicked(index);
 
-    // If it was me
     if (playerId === this.networkManager.getMyId()) {
-      // I got it!
-      const item = this.partyBoxItems[index];
-      if (item && item.userData.itemId) {
-        this.selectedItem = item.userData.itemId;
+      const itemId = this.partyBoxManager.getItemId(index);
+      if (itemId) {
+        this.buildSystem.selectedItem = itemId;
         this.setState(GameState.BUILD_VIEW);
       }
+    }
+  }
+
+  private generatePartyBoxItems(): void {
+    const items = this.partyBoxManager.generateItems(this.lobbyPlayers.length);
+    this.partyBoxManager.spawnItems(items);
+
+    this.networkManager.send({
+      t: PacketType.PARTY_BOX_UPDATE,
+      p: items,
+    });
+  }
+
+  // ========== 状态管理 ==========
+
+  private setState(newState: GameState): void {
+    if (this.state === newState) return;
+
+    this.state = newState;
+    this.uiManager.showMessage(`State: ${GameState[newState]}`);
+
+    switch (newState) {
+      case GameState.TITLE:
+        this.onEnterTitle();
+        break;
+      case GameState.LOBBY:
+        this.onEnterLobby();
+        break;
+      case GameState.PICK:
+        this.onEnterPick();
+        break;
+      case GameState.BUILD_VIEW:
+        this.onEnterBuildView();
+        break;
+      case GameState.BUILD_PLACE:
+        this.onEnterBuildPlace();
+        break;
+      case GameState.COUNTDOWN:
+        this.onEnterCountdown();
+        break;
+      case GameState.SCORE:
+        this.onEnterScore();
+        break;
+    }
+
+    // 非建造状态清理
+    if (
+      newState !== GameState.BUILD_VIEW &&
+      newState !== GameState.BUILD_PLACE
+    ) {
+      this.buildSystem.removeGhost();
+      this.buildSystem.hideBombIndicator();
+    }
+  }
+
+  private onEnterTitle(): void {
+    this.cameraController.cancelTween();
+    this.cameraController.setPosition(0, 4, 4);
+    this.cameraController.lookAt(0, 4, -10);
+
+    this.uiManager.clearUI();
+    document.exitPointerLock();
+
+    this.partyBoxManager.resetRoundCount();
+    this.scoreManager.resetAll(this.lobbyPlayers);
+    this.levelManager.clearPlacedObjects();
+
+    // 清理十字弓
+    this.crossbows.forEach((c) => c.cleanup());
+    this.crossbows = [];
+    this.buildSystem.clearCrossbows();
+
+    // 重置玩家
+    this.players.forEach((player, id) => {
+      if (id !== "local") {
+        this.scene.remove(player.rig.root);
+        this.physicsWorld.world.removeBody(player.body);
+      } else {
+        player.resetPosition(new CANNON.Vec3(0, 5, 0));
+        player.score = 0;
+      }
+    });
+
+    const localPlayer = this.players.get("local");
+    this.players.clear();
+    if (localPlayer) {
+      this.players.set("local", localPlayer);
+    }
+
+    this.uiManager.showTitleScreen(
+      (nickname) => {
+        this.myPlayerInfo.nickname = nickname;
+        this.myPlayerInfo.isHost = true;
+        this.myPlayerInfo.id = this.networkManager.getMyId();
+        this.networkManager.setHost(true);
+        this.lobbyPlayers = [this.myPlayerInfo];
+        this.setState(GameState.LOBBY);
+      },
+      (nickname, hostId) => {
+        this.myPlayerInfo.nickname = nickname;
+        this.myPlayerInfo.isHost = false;
+        this.networkManager.connectToHost(hostId);
+
+        this.networkManager.onPeerConnected = () => {
+          this.networkManager.send(
+            {
+              t: PacketType.JOIN,
+              p: { nickname: nickname },
+            },
+            hostId
+          );
+        };
+      }
+    );
+  }
+
+  private onEnterLobby(): void {
+    this.cameraController.cancelTween();
+    this.cameraController.setPosition(0, 1.5, 6);
+    this.cameraController.lookAt(0, 1, 0);
+
+    this.levelManager.setMapVisible(false);
+    this.players.forEach((player) => {
+      player.rig.root.visible = false;
+    });
+
+    this.uiManager.clearUI();
+    this.levelManager.clearPlacedObjects();
+    this.refreshLobbyUI();
+  }
+
+  private onEnterPick(): void {
+    this.levelManager.setMapVisible(true);
+    this.players.forEach((player) => {
+      player.rig.root.visible = true;
+    });
+
+    this.uiManager.clearUI();
+    document.exitPointerLock();
+    this.resetPlayers();
+
+    this.buildSystem.setHighlightVisible(false);
+    this.buildSystem.setGridHelperVisible(false);
+    this.levelManager.setPartyBoxVisible(true);
+
+    this.playersFinishedTurn.clear();
+    this.buildSystem.selectedItem = null;
+    this.buildSystem.rotation = 0;
+
+    // 相机平移动画
+    this.cameraController.cancelTween();
+    this.cameraController.setPosition(0, 4, 4);
+    this.cameraController.lookAt(0, 4, -10);
+    this.cameraController.tweenTo(new THREE.Vector3(11, 4, 4), 1.0);
+    this.cameraController.lookAt(0, 4, -10);
+
+    if (this.networkManager.isHostUser()) {
+      this.generatePartyBoxItems();
+    }
+  }
+
+  private onEnterBuildView(): void {
+    this.levelManager.setPartyBoxVisible(false);
+    document.exitPointerLock();
+
+    this.buildSystem.setHighlightVisible(false);
+    this.buildSystem.setGridHelperVisible(false);
+    this.buildSystem.createGhost();
+
+    this.cameraController.cancelTween();
+    this.cameraController.initBuildViewCamera();
+  }
+
+  private onEnterBuildPlace(): void {
+    this.buildSystem.setHighlightVisible(true);
+    this.buildSystem.height = 8;
+  }
+
+  private onEnterCountdown(): void {
+    this.levelManager.setPartyBoxVisible(false);
+    this.buildSystem.setHighlightVisible(false);
+    this.buildSystem.hideBombIndicator();
+
+    // 执行炸弹爆炸
+    const bombCount = this.levelManager.explodeBombs();
+    if (bombCount > 0) {
+      this.uiManager.showMessage("BOOM!");
+    }
+
+    this.countdownTimer = 3.0;
+    document.body.requestPointerLock();
+    this.uiManager.showMessage("Get Ready! 3");
+
+    this.cameraController.cancelTween();
+    this.cameraController.setPosition(0, 25, -15);
+    this.cameraController.lookAt(0, 1, 12.5);
+
+    this.playersFinishedTurn.clear();
+    this.scoreManager.resetRound();
+  }
+
+  private onEnterScore(): void {
+    document.exitPointerLock();
+
+    this.cameraController.setPosition(8, 6, 22);
+    this.cameraController.lookAt(0, 2, 25);
+
+    this.players.forEach((player) => {
+      player.rig.root.visible = true;
+    });
+
+    setTimeout(() => {
+      if (this.networkManager.isHostUser()) {
+        const scores = this.scoreManager.calculateScores(
+          this.lobbyPlayers,
+          this.networkManager.getMyId(),
+          (id) => {
+            if (id === this.networkManager.getMyId()) {
+              return this.players.get("local");
+            }
+            return this.players.get(id);
+          }
+        );
+
+        this.networkManager.send({
+          t: PacketType.SHOW_SCORE,
+          p: { scores: scores },
+        });
+
+        this.uiManager.showScoreScreen(
+          scores,
+          ScoreManager.GOAL_SCORE,
+          () => {
+            const winner = this.scoreManager.checkWinner(scores);
+
+            if (winner) {
+              const winnerPlayer = this.lobbyPlayers.find(
+                (p) => p.nickname === winner.nickname
+              );
+              const winnerCharacter = winnerPlayer?.character || "chicken";
+
+              this.networkManager.send({
+                t: PacketType.GAME_WIN,
+                p: { nickname: winner.nickname, character: winnerCharacter },
+              });
+
+              this.uiManager.showWinScreen(
+                winner.nickname,
+                winnerCharacter,
+                () => {
+                  this.scoreManager.resetAll(this.lobbyPlayers);
+                  this.setState(GameState.LOBBY);
+                }
+              );
+            } else {
+              this.networkManager.send({ t: PacketType.START_GAME, p: {} });
+              this.startGame();
+            }
+          }
+        );
+      }
+    }, 2000);
+  }
+
+  // ========== 游戏循环 ==========
+
+  private update(): void {
+    this.physicsWorld.step(1 / 60);
+
+    // 更新十字弓
+    this.crossbows.forEach((crossbow) => {
+      crossbow.update(1 / 60);
+    });
+    this.buildSystem.getCrossbows().forEach((crossbow) => {
+      crossbow.update(1 / 60);
+    });
+
+    // 更新玩家
+    this.players.forEach((player) => {
+      player.update(1 / 60);
+    });
+
+    // 更新相机平滑过渡
+    this.cameraController.updateTween(1 / 60);
+
+    // 更新云朵
+    this.levelManager.updateClouds();
+
+    // 更新大厅动画
+    if (this.state === GameState.LOBBY) {
+      this.uiManager.updateLobbyAnimations(1 / 60);
+    }
+
+    // 更新 Party Box 物品旋转
+    if (this.state === GameState.PICK) {
+      this.partyBoxManager.updateItemsRotation();
+    }
+
+    // 倒计时逻辑
+    if (this.state === GameState.COUNTDOWN) {
+      this.updateCountdown();
+    }
+
+    // 玩家控制
+    if (this.state === GameState.RUN || this.state === GameState.COUNTDOWN) {
+      this.updatePlayerControl();
+    } else if (
+      this.state === GameState.BUILD_VIEW ||
+      this.state === GameState.BUILD_PLACE
+    ) {
+      if (this.state === GameState.BUILD_PLACE) {
+        this.buildSystem.updateGhostValidityColor();
+      }
+    }
+
+    // 发送快照
+    if (this.state === GameState.RUN || this.state === GameState.COUNTDOWN) {
+      this.sendSnapshot();
+    }
+
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  private updateCountdown(): void {
+    this.countdownTimer -= 1 / 60;
+    if (this.countdownTimer <= 0) {
+      this.setState(GameState.RUN);
+    } else {
+      this.uiManager.showMessage(`Get Ready! ${Math.ceil(this.countdownTimer)}`);
+
+      const localPlayer = this.players.get("local");
+      if (localPlayer) {
+        if (localPlayer.body.position.x < -1)
+          localPlayer.body.position.x = -1;
+        if (localPlayer.body.position.x > 1) localPlayer.body.position.x = 1;
+        if (localPlayer.body.position.z < -1)
+          localPlayer.body.position.z = -1;
+        if (localPlayer.body.position.z > 1) localPlayer.body.position.z = 1;
+      }
+    }
+  }
+
+  private updatePlayerControl(): void {
+    const localPlayer = this.players.get("local");
+    if (!localPlayer) return;
+
+    // 观战模式
+    if (
+      this.state === GameState.RUN &&
+      this.playersFinishedTurn.has(this.networkManager.getMyId())
+    ) {
+      this.cameraController.updateFreeCamera(
+        this.inputManager.isKeyPressed("KeyW"),
+        this.inputManager.isKeyPressed("KeyS"),
+        this.inputManager.isKeyPressed("KeyA"),
+        this.inputManager.isKeyPressed("KeyD"),
+        this.inputManager.isKeyPressed("Space"),
+        this.inputManager.isKeyPressed("ShiftLeft")
+      );
+    } else {
+      // 正常控制
+      const mouseDelta = this.inputManager.getMouseDelta();
+      if (document.pointerLockElement) {
+        this.cameraController.handleMouseRotation(mouseDelta.x, mouseDelta.y);
+      }
+
+      const input = {
+        x: this.inputManager.getAxis("KeyA", "KeyD"),
+        y: this.inputManager.getAxis("KeyW", "KeyS"),
+        jump: this.inputManager.isKeyPressed("Space"),
+        sprint:
+          this.inputManager.isKeyPressed("ShiftLeft") ||
+          this.inputManager.isKeyPressed("ShiftRight"),
+      };
+      localPlayer.setInput(input, this.cameraController.angleY);
+
+      const targetPos = new THREE.Vector3();
+      localPlayer.rig.root.getWorldPosition(targetPos);
+      this.cameraController.updateOrbitCamera(targetPos);
+    }
+
+    // 检测死亡/胜利
+    if (this.state === GameState.RUN) {
+      if (!this.playersFinishedTurn.has(this.networkManager.getMyId())) {
+        if (localPlayer.checkDeath() || localPlayer.hasWon) {
+          this.playersFinishedTurn.add(this.networkManager.getMyId());
+          this.uiManager.showMessage(localPlayer.hasWon ? "GOAL!" : "DIED!");
+
+          if (localPlayer.hasWon) {
+            localPlayer.setAnimState("dance");
+          }
+
+          this.networkManager.send({
+            t: PacketType.PLAYER_FINISHED_RUN,
+            p: {
+              won: localPlayer.hasWon,
+              killedBy: localPlayer.lastHitBy,
+            },
+          });
+
+          if (this.networkManager.isHostUser()) {
+            if (localPlayer.hasWon) {
+              this.scoreManager.recordFinish(this.networkManager.getMyId());
+            }
+            if (
+              localPlayer.lastHitBy &&
+              localPlayer.lastHitBy !== this.networkManager.getMyId()
+            ) {
+              this.scoreManager.recordTrapKill(localPlayer.lastHitBy);
+            }
+          }
+
+          const delay = localPlayer.hasWon ? 0 : 2000;
+          setTimeout(() => {
+            document.exitPointerLock();
+            this.cameraController.setPosition(8, 6, 22);
+            this.cameraController.lookAt(0, 2, 25);
+
+            if (this.networkManager.isHostUser()) {
+              if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {
+                this.setState(GameState.SCORE);
+              }
+            }
+          }, delay);
+        }
+      }
+    }
+  }
+
+  private sendSnapshot(): void {
+    const localPlayer = this.players.get("local");
+    if (localPlayer && this.networkManager.getMyId()) {
+      this.networkManager.send({
+        t: PacketType.SNAPSHOT,
+        p: {
+          id: this.networkManager.getMyId(),
+          pos: [
+            localPlayer.body.position.x,
+            localPlayer.body.position.y,
+            localPlayer.body.position.z,
+          ],
+          rot: [
+            localPlayer.body.quaternion.x,
+            localPlayer.body.quaternion.y,
+            localPlayer.body.quaternion.z,
+            localPlayer.body.quaternion.w,
+          ],
+          anim: "idle",
+        },
+      });
     }
   }
 }
