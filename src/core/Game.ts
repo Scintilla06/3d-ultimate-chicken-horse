@@ -23,6 +23,12 @@ import { ScoreManager } from "./ScoreManager";
 import { LevelManager } from "./LevelManager";
 import { PartyBoxManager } from "./PartyBoxManager";
 import { Crossbow } from "../objects/traps/Crossbow";
+import { AudioManager } from "../audio/AudioManager";
+import {
+  AUDIO_MANIFEST,
+  AudioId as AudioIds,
+  type AudioId,
+} from "../audio/AudioManifest";
 
 export enum GameState {
   TITLE,
@@ -48,6 +54,10 @@ export class Game {
   private uiManager: UIManager;
   private inputManager: InputManager;
 
+  private audio: AudioManager;
+  private audioPrimed: boolean = false;
+  private localDeathSoundPlayed: boolean = false;
+
   // 新增管理器
   private cameraController: CameraController;
   private buildSystem: BuildSystem;
@@ -57,7 +67,6 @@ export class Game {
 
   // 玩家和十字弓
   private players: Map<string, Player> = new Map();
-  private crossbows: Crossbow[] = [];
 
   // 多人游戏
   private lobbyPlayers: PlayerInfo[] = [];
@@ -102,6 +111,12 @@ export class Game {
     this.uiManager = new UIManager();
     this.inputManager = new InputManager();
     this.loop = new Loop(this.update.bind(this));
+
+    // 音频（本地）
+    this.audio = new AudioManager();
+    (Object.keys(AUDIO_MANIFEST) as AudioId[]).forEach((id) => {
+      this.audio.register(id, AUDIO_MANIFEST[id]);
+    });
 
     // 初始化管理器
     this.cameraController = new CameraController(this.camera);
@@ -169,6 +184,21 @@ export class Game {
     this.physicsWorld.world.addBody(playerBody);
 
     const player = new Player(rig, playerBody);
+    player.onJumpStart = () => {
+      this.audio.playSfx(AudioIds.Jump);
+    };
+    player.onCoinCollect = () => {
+      this.audio.playSfx(AudioIds.Coin);
+    };
+    player.onGoal = () => {
+      this.audio.playSfx(AudioIds.Goal);
+    };
+    player.onDeath = () => {
+      if (!this.localDeathSoundPlayed) {
+        this.localDeathSoundPlayed = true;
+        this.audio.playSfx(AudioIds.Death);
+      }
+    };
     this.players.set("local", player);
 
     this.loop.start();
@@ -219,7 +249,10 @@ export class Game {
         !this.playersFinishedTurn.has(this.networkManager.getMyId())
       ) {
         if (event.buttons === 1 || event.buttons === 2) {
-          this.cameraController.handleFreeLook(event.movementX, event.movementY);
+          this.cameraController.handleFreeLook(
+            event.movementX,
+            event.movementY
+          );
         }
       } else if (this.state === GameState.BUILD_PLACE) {
         this.buildSystem.updateGhostPositionFromMouse(
@@ -255,10 +288,14 @@ export class Game {
     });
 
     window.addEventListener("mousedown", () => {
+      void this.primeAudioFromGesture();
       this.uiManager.handlePointerDown();
     });
 
     window.addEventListener("click", () => {
+      void this.primeAudioFromGesture().then(() => {
+        this.audio.playSfx(AudioIds.UiClick);
+      });
       const consumed = this.uiManager.handleClick();
       if (consumed) return;
 
@@ -277,6 +314,28 @@ export class Game {
     });
   }
 
+  private async primeAudioFromGesture(): Promise<void> {
+    await this.audio.unlock();
+    if (this.audioPrimed) return;
+    this.audioPrimed = true;
+
+    // 预加载常用音效（不阻塞游戏逻辑）
+    void this.audio.preload([
+      AudioIds.BgmMain,
+      AudioIds.UiClick,
+      AudioIds.BuildPlace,
+      AudioIds.BuildInvalid,
+      AudioIds.Jump,
+      AudioIds.Coin,
+      AudioIds.Death,
+      AudioIds.Goal,
+      AudioIds.Win,
+      AudioIds.Boom,
+      AudioIds.CrossbowFire,
+      AudioIds.ArrowHit,
+    ]);
+  }
+
   private handlePickClick(): void {
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const intersects = this.raycaster.intersectObjects(
@@ -285,6 +344,7 @@ export class Game {
     );
 
     if (intersects.length > 0) {
+      this.audio.playSfx(AudioIds.UiClick);
       let target = intersects[0].object;
       while (target.parent && !target.userData.itemId) {
         target = target.parent;
@@ -307,10 +367,7 @@ export class Game {
   }
 
   private handleBuildPlaceClick(): void {
-    if (
-      this.buildSystem.ghostObject &&
-      this.buildSystem.selectedItem
-    ) {
+    if (this.buildSystem.ghostObject && this.buildSystem.selectedItem) {
       if (
         this.buildSystem.isValidPlacement(
           this.buildSystem.selectedItem,
@@ -323,9 +380,9 @@ export class Game {
           this.buildSystem.rotation
         );
 
-        if (crossbow) {
-          this.crossbows.push(crossbow);
-        }
+        if (crossbow) this.attachCrossbowAudio(crossbow);
+
+        this.audio.playSfx(AudioIds.BuildPlace);
 
         this.playersFinishedTurn.add(this.networkManager.getMyId());
 
@@ -351,9 +408,19 @@ export class Game {
           this.buildSystem.setHighlightVisible(false);
         }
       } else {
+        this.audio.playSfx(AudioIds.BuildInvalid);
         this.uiManager.showMessage("Invalid Placement!");
       }
     }
+  }
+
+  private attachCrossbowAudio(crossbow: Crossbow): void {
+    crossbow.onFire = () => {
+      this.audio.playSfx(AudioIds.CrossbowFire);
+    };
+    crossbow.onArrowHit = () => {
+      this.audio.playSfx(AudioIds.ArrowHit);
+    };
   }
 
   // ========== 网络处理 ==========
@@ -421,6 +488,7 @@ export class Game {
           break;
         case PacketType.GAME_WIN:
           if (!this.networkManager.isHostUser()) {
+            this.audio.playSfx(AudioIds.Win);
             this.uiManager.showWinScreen(
               packet.p.nickname,
               packet.p.character,
@@ -526,9 +594,7 @@ export class Game {
       packet.p.rot || 0
     );
 
-    if (crossbow) {
-      this.crossbows.push(crossbow);
-    }
+    if (crossbow) this.attachCrossbowAudio(crossbow);
 
     this.playersFinishedTurn.add(packet.p.playerId);
     this.checkAllPlayersFinished();
@@ -581,7 +647,10 @@ export class Game {
     const appearance = getCharacterAppearance(characterId);
     this.scene.remove(localPlayer.rig.root);
 
-    const newRig = CharacterRig.createFromAppearance(this.resources, appearance);
+    const newRig = CharacterRig.createFromAppearance(
+      this.resources,
+      appearance
+    );
     this.scene.add(newRig.root);
 
     if (this.state === GameState.LOBBY) {
@@ -781,6 +850,8 @@ export class Game {
   }
 
   private onEnterTitle(): void {
+    void this.audio.playBgm(AudioIds.BgmMain);
+
     this.cameraController.cancelTween();
     this.cameraController.setPosition(0, 4, 4);
     this.cameraController.lookAt(0, 4, -10);
@@ -791,11 +862,9 @@ export class Game {
     this.partyBoxManager.resetRoundCount();
     this.scoreManager.resetAll(this.lobbyPlayers);
     this.levelManager.clearPlacedObjects();
-
-    // 清理十字弓
-    this.crossbows.forEach((c) => c.cleanup());
-    this.crossbows = [];
     this.buildSystem.clearCrossbows();
+
+    this.localDeathSoundPlayed = false;
 
     // 重置玩家
     this.players.forEach((player, id) => {
@@ -884,6 +953,8 @@ export class Game {
     if (this.networkManager.isHostUser()) {
       this.generatePartyBoxItems();
     }
+
+    this.localDeathSoundPlayed = false;
   }
 
   private onEnterBuildView(): void {
@@ -911,6 +982,7 @@ export class Game {
     // 执行炸弹爆炸
     const bombCount = this.levelManager.explodeBombs();
     if (bombCount > 0) {
+      this.audio.playSfx(AudioIds.Boom);
       this.uiManager.showMessage("BOOM!");
     }
 
@@ -924,6 +996,8 @@ export class Game {
 
     this.playersFinishedTurn.clear();
     this.scoreManager.resetRound();
+
+    this.localDeathSoundPlayed = false;
   }
 
   private onEnterScore(): void {
@@ -954,37 +1028,34 @@ export class Game {
           p: { scores: scores },
         });
 
-        this.uiManager.showScoreScreen(
-          scores,
-          ScoreManager.GOAL_SCORE,
-          () => {
-            const winner = this.scoreManager.checkWinner(scores);
+        this.uiManager.showScoreScreen(scores, ScoreManager.GOAL_SCORE, () => {
+          const winner = this.scoreManager.checkWinner(scores);
 
-            if (winner) {
-              const winnerPlayer = this.lobbyPlayers.find(
-                (p) => p.nickname === winner.nickname
-              );
-              const winnerCharacter = winnerPlayer?.character || "chicken";
+          if (winner) {
+            const winnerPlayer = this.lobbyPlayers.find(
+              (p) => p.nickname === winner.nickname
+            );
+            const winnerCharacter = winnerPlayer?.character || "chicken";
 
-              this.networkManager.send({
-                t: PacketType.GAME_WIN,
-                p: { nickname: winner.nickname, character: winnerCharacter },
-              });
+            this.networkManager.send({
+              t: PacketType.GAME_WIN,
+              p: { nickname: winner.nickname, character: winnerCharacter },
+            });
 
-              this.uiManager.showWinScreen(
-                winner.nickname,
-                winnerCharacter,
-                () => {
-                  this.scoreManager.resetAll(this.lobbyPlayers);
-                  this.setState(GameState.LOBBY);
-                }
-              );
-            } else {
-              this.networkManager.send({ t: PacketType.START_GAME, p: {} });
-              this.startGame();
-            }
+            this.audio.playSfx(AudioIds.Win);
+            this.uiManager.showWinScreen(
+              winner.nickname,
+              winnerCharacter,
+              () => {
+                this.scoreManager.resetAll(this.lobbyPlayers);
+                this.setState(GameState.LOBBY);
+              }
+            );
+          } else {
+            this.networkManager.send({ t: PacketType.START_GAME, p: {} });
+            this.startGame();
           }
-        );
+        });
       }
     }, 2000);
   }
@@ -994,10 +1065,7 @@ export class Game {
   private update(): void {
     this.physicsWorld.step(1 / 60);
 
-    // 更新十字弓
-    this.crossbows.forEach((crossbow) => {
-      crossbow.update(1 / 60);
-    });
+    // 更新十字弓（统一从 BuildSystem 获取，避免重复更新）
     this.buildSystem.getCrossbows().forEach((crossbow) => {
       crossbow.update(1 / 60);
     });
@@ -1053,15 +1121,15 @@ export class Game {
     if (this.countdownTimer <= 0) {
       this.setState(GameState.RUN);
     } else {
-      this.uiManager.showMessage(`Get Ready! ${Math.ceil(this.countdownTimer)}`);
+      this.uiManager.showMessage(
+        `Get Ready! ${Math.ceil(this.countdownTimer)}`
+      );
 
       const localPlayer = this.players.get("local");
       if (localPlayer) {
-        if (localPlayer.body.position.x < -1)
-          localPlayer.body.position.x = -1;
+        if (localPlayer.body.position.x < -1) localPlayer.body.position.x = -1;
         if (localPlayer.body.position.x > 1) localPlayer.body.position.x = 1;
-        if (localPlayer.body.position.z < -1)
-          localPlayer.body.position.z = -1;
+        if (localPlayer.body.position.z < -1) localPlayer.body.position.z = -1;
         if (localPlayer.body.position.z > 1) localPlayer.body.position.z = 1;
       }
     }
@@ -1112,6 +1180,12 @@ export class Game {
         if (localPlayer.checkDeath() || localPlayer.hasWon) {
           this.playersFinishedTurn.add(this.networkManager.getMyId());
           this.uiManager.showMessage(localPlayer.hasWon ? "GOAL!" : "DIED!");
+
+          // 掉落死亡不会触发 collide，补一声
+          if (!localPlayer.hasWon && !this.localDeathSoundPlayed) {
+            this.localDeathSoundPlayed = true;
+            this.audio.playSfx(AudioIds.Death);
+          }
 
           if (localPlayer.hasWon) {
             localPlayer.setAnimState("dance");
