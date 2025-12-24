@@ -13,6 +13,11 @@ export class Player extends Character {
   private readonly MOVE_SPEED: number = 8; // Reduced from 12
   private readonly SPRINT_MULTIPLIER: number = 1.5;
 
+  public onJumpStart?: () => void;
+  public onCoinCollect?: () => void;
+  public onGoal?: () => void;
+  public onDeath?: (info: { tag: string; owner?: string }) => void;
+
   public isDead: boolean = false;
   public hasWon: boolean = false;
   public score: number = 0;
@@ -28,11 +33,17 @@ export class Player extends Character {
       if (contactBody.userData) {
         const tag = contactBody.userData.tag;
         if (tag === "trap" || tag === "black_hole" || tag === "turret") {
-          this.isDead = true;
-          this.animState = "dead";
-          this.lastHitBy = contactBody.userData.owner; // Track killer
+          if (!this.isDead) {
+            this.isDead = true;
+            this.animState = "dead";
+            this.lastHitBy = contactBody.userData.owner; // Track killer
+            this.onDeath?.({ tag, owner: contactBody.userData.owner });
+          }
         } else if (tag === "goal") {
-          this.hasWon = true;
+          if (!this.hasWon) {
+            this.hasWon = true;
+            this.onGoal?.();
+          }
         } else if (tag === "spring") {
           this.body.velocity.y = 20; // High bounce
           this.isJumping = true;
@@ -40,6 +51,7 @@ export class Player extends Character {
           if (!contactBody.userData.collected) {
             this.score += 1;
             contactBody.userData.collected = true;
+            this.onCoinCollect?.();
             // Hide coin visually
             if (contactBody.meshReference) {
               contactBody.meshReference.visible = false;
@@ -168,13 +180,15 @@ export class Player extends Character {
 
     // --- Jumping ---
     if (input.jump) {
-      if (grounded) {
+      const startedJump = grounded && !this.isJumping;
+      if (startedJump) {
         this.isJumping = true;
         this.jumpTime = 0;
 
         let jumpForce = this.MIN_JUMP_FORCE;
 
         this.body.velocity.y = jumpForce;
+        this.onJumpStart?.();
       } else if (this.isJumping && this.jumpTime < this.MAX_JUMP_TIME) {
         this.body.applyForce(
           new CANNON.Vec3(0, this.JUMP_HOLD_FORCE, 0),

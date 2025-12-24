@@ -77,3 +77,7 @@ A 3D multiplayer platformer game inspired by "Ultimate Chicken Horse", built wit
 *   **[PeerJS](https://peerjs.com/):** WebRTC Networking
 *   **[Vite](https://vitejs.dev/):** Build Tool
 *   **TypeScript:** Programming Language
+
+## Audio
+
+This project plays audio locally only (no network sync). Audio playback unlocks after the first user gesture (click/mousedown) due to browser autoplay policies.
