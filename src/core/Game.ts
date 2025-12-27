@@ -8,6 +8,9 @@ import {
   PlayerInfo,
   SnapshotPayload,
   ChatPayload,
+  MapSelectPayload,
+  MapVotesPayload,
+  MapChosenPayload,
 } from "../network/Protocol";
 import { Resources } from "./Resources";
 import { Loop } from "./Loop";
@@ -29,6 +32,7 @@ import {
   AudioId as AudioIds,
   type AudioId,
 } from "../audio/AudioManifest";
+import { MapSelector } from "../ui/components/MapSelector";
 
 export enum GameState {
   TITLE,
@@ -77,7 +81,12 @@ export class Game {
     character: "",
     isHost: false,
     isReady: false,
+    selectedMap: "enchanted_forest",
   };
+  
+  // 地图投票系统
+  private mapVotes: { [playerId: string]: string } = {};
+  private selectedMapId: string = "enchanted_forest";
 
   // 游戏状态
   private state: GameState = -1 as GameState;
@@ -142,7 +151,8 @@ export class Game {
         this.physicsWorld,
         this.resources
       );
-      this.levelManager.initScene();
+      // 标题页使用白色背景，不加载地图
+      this.levelManager.initSceneForTitle();
 
       // 初始化 Party Box 管理器
       this.partyBoxManager = new PartyBoxManager(
@@ -511,6 +521,15 @@ export class Game {
             this.networkManager.send(packet);
           }
           break;
+        case PacketType.MAP_SELECT:
+          this.handleMapSelectPacket(packet, senderId);
+          break;
+        case PacketType.MAP_VOTES:
+          this.handleMapVotesPacket(packet);
+          break;
+        case PacketType.MAP_CHOSEN:
+          this.handleMapChosenPacket(packet);
+          break;
       }
     };
   }
@@ -534,6 +553,7 @@ export class Game {
         p: {
           players: this.lobbyPlayers,
           state: this.state,
+          mapVotes: this.mapVotes,
         },
       },
       senderId
@@ -545,6 +565,11 @@ export class Game {
   private handleWelcomePacket(packet: Packet): void {
     this.lobbyPlayers = packet.p.players;
     this.myPlayerInfo.id = this.networkManager.getMyId();
+    
+    // 同步地图投票
+    if (packet.p.mapVotes) {
+      this.mapVotes = packet.p.mapVotes;
+    }
 
     const myProfile = this.lobbyPlayers.find(
       (p) => p.id === this.myPlayerInfo.id
@@ -582,6 +607,51 @@ export class Game {
         sender.character = requestedChar;
       }
       this.broadcastLobbyUpdate();
+    }
+  }
+
+  // ========== 地图选择处理 ==========
+
+  private handleMapSelectPacket(packet: Packet, senderId: string): void {
+    if (!this.networkManager.isHostUser()) return;
+
+    const payload = packet.p as MapSelectPayload;
+    this.mapVotes[senderId] = payload.mapId;
+    
+    // 广播所有投票
+    this.broadcastMapVotes();
+  }
+
+  private handleMapVotesPacket(packet: Packet): void {
+    const payload = packet.p as MapVotesPayload;
+    this.mapVotes = payload.votes;
+    this.uiManager.updateMapVotes(this.mapVotes);
+  }
+
+  private handleMapChosenPacket(packet: Packet): void {
+    const payload = packet.p as MapChosenPayload;
+    this.selectedMapId = payload.mapId;
+  }
+
+  private broadcastMapVotes(): void {
+    this.networkManager.send({
+      t: PacketType.MAP_VOTES,
+      p: { votes: this.mapVotes } as MapVotesPayload,
+    });
+    this.uiManager.updateMapVotes(this.mapVotes);
+  }
+
+  private selectMapForVote(mapId: string): void {
+    this.myPlayerInfo.selectedMap = mapId;
+    this.mapVotes[this.networkManager.getMyId()] = mapId;
+
+    if (this.networkManager.isHostUser()) {
+      this.broadcastMapVotes();
+    } else {
+      this.networkManager.send({
+        t: PacketType.MAP_SELECT,
+        p: { playerId: this.networkManager.getMyId(), mapId } as MapSelectPayload,
+      });
     }
   }
 
@@ -701,6 +771,15 @@ export class Game {
             (p) => p.character && p.character !== ""
           );
           if (allReady) {
+            // 根据投票选择地图
+            if (this.networkManager.isHostUser()) {
+              this.selectedMapId = MapSelector.chooseMapByVotes(this.mapVotes);
+              // 广播选中的地图
+              this.networkManager.send({
+                t: PacketType.MAP_CHOSEN,
+                p: { mapId: this.selectedMapId } as MapChosenPayload,
+              });
+            }
             this.networkManager.send({ t: PacketType.START_GAME, p: {} });
             this.startGame();
           } else {
@@ -708,12 +787,23 @@ export class Game {
           }
         }
       );
+      
+      // 显示地图选择器
+      this.uiManager.showMapSelector(
+        (mapId) => this.selectMapForVote(mapId),
+        this.myPlayerInfo.selectedMap
+      );
+      this.uiManager.updateMapVotes(this.mapVotes);
     }
   }
 
-  private startGame(): void {
+  private async startGame(): Promise<void> {
     this.uiManager.cleanupLobbyCharacters();
+    this.uiManager.hideMapSelector();
     this.uiManager.clearUI();
+
+    // 加载选中的地图
+    await this.levelManager.loadMap(this.selectedMapId);
 
     if (this.myPlayerInfo.character) {
       this.updateLocalPlayerModel(this.myPlayerInfo.character);
@@ -1081,8 +1171,8 @@ export class Game {
     // 更新云朵
     this.levelManager.updateClouds();
     
-    // 更新萤火虫动画
-    this.levelManager.updateFireflies(performance.now() / 1000);
+    // 更新地图动画（萤火虫、雪花等）
+    this.levelManager.updateMap(performance.now() / 1000);
 
     // 更新大厅动画
     if (this.state === GameState.LOBBY) {

@@ -20,12 +20,28 @@ export enum PacketType {
     PLAYER_FINISHED_RUN = 'Fin_Run',
     SHOW_SCORE = 'Score',
     CHAT = 'Chat',
-    GAME_WIN = 'Win'
+    GAME_WIN = 'Win',
+    MAP_SELECT = 'M_Sel',       // 玩家选择地图
+    MAP_VOTES = 'M_Votes',      // 广播所有玩家的地图投票
+    MAP_CHOSEN = 'M_Chosen'     // 最终选中的地图
 }
 
 export interface ChatPayload {
     nickname: string;
     message: string;
+}
+
+export interface MapSelectPayload {
+    playerId: string;
+    mapId: string;
+}
+
+export interface MapVotesPayload {
+    votes: { [playerId: string]: string }; // playerId -> mapId
+}
+
+export interface MapChosenPayload {
+    mapId: string;
 }
 
 export interface InputPayload {
@@ -48,4 +64,5 @@ export interface PlayerInfo {
     character: string;
     isHost: boolean;
     isReady: boolean;
+    selectedMap?: string; // 玩家选择的地图
 }

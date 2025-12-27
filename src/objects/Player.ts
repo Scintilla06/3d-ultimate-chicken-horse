@@ -8,10 +8,10 @@ export class Player extends Character {
   private isJumping: boolean = false;
   private jumpTime: number = 0;
   private readonly MAX_JUMP_TIME: number = 0.3;
-  private readonly MIN_JUMP_FORCE: number = 5; // Reduced from 6
-  private readonly JUMP_HOLD_FORCE: number = 12; // Reduced from 15
-  private readonly MOVE_SPEED: number = 8; // Reduced from 12
-  private readonly SPRINT_MULTIPLIER: number = 1.5;
+  private readonly MIN_JUMP_FORCE: number = 4;
+  private readonly JUMP_HOLD_FORCE: number = 10;
+  private readonly MOVE_SPEED: number = 5;
+  private readonly SPRINT_MULTIPLIER: number = 1.4;
 
   public onJumpStart?: () => void;
   public onCoinCollect?: () => void;

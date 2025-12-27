@@ -6,6 +6,7 @@ import { listCharacterAppearances } from "../objects/character/CharacterRegistry
 import { ChatSystem } from "./components/ChatSystem";
 import { ScoreScreen, ScoreData } from "./components/ScoreScreen";
 import { WinScreen } from "./components/WinScreen";
+import { MapSelector } from "./components/MapSelector";
 
 /**
  * Lobby 角色模型数据
@@ -38,12 +39,14 @@ export class UIManager {
   private chatSystem: ChatSystem;
   private scoreScreen: ScoreScreen;
   private winScreen: WinScreen;
+  private mapSelector: MapSelector;
 
   constructor() {
     this.uiLayer = document.getElementById("ui-layer") as HTMLElement;
     this.chatSystem = new ChatSystem();
     this.scoreScreen = new ScoreScreen(this.uiLayer);
     this.winScreen = new WinScreen(this.uiLayer);
+    this.mapSelector = new MapSelector();
   }
 
   // ========== 聊天系统代理方法 ==========
@@ -523,6 +526,27 @@ export class UIManager {
     if (picker) {
       picker.style.display = show ? "flex" : "none";
     }
+  }
+
+  // ========== 地图选择 ==========
+
+  public showMapSelector(
+    onSelect: (mapId: string) => void,
+    currentSelection?: string
+  ): void {
+    this.mapSelector.show(this.uiLayer, onSelect, currentSelection);
+  }
+
+  public hideMapSelector(): void {
+    this.mapSelector.hide();
+  }
+
+  public updateMapVotes(votes: { [playerId: string]: string }): void {
+    this.mapSelector.updateVotes(votes);
+  }
+
+  public getSelectedMapId(): string {
+    return this.mapSelector.getSelectedMapId();
   }
 
   public clearUI(): void {
