@@ -1080,6 +1080,9 @@ export class Game {
 
     // 更新云朵
     this.levelManager.updateClouds();
+    
+    // 更新萤火虫动画
+    this.levelManager.updateFireflies(performance.now() / 1000);
 
     // 更新大厅动画
     if (this.state === GameState.LOBBY) {

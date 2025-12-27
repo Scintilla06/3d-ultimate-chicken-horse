@@ -5,7 +5,7 @@ export class PhysicsWorld {
 
     constructor() {
         this.world = new CANNON.World();
-        this.world.gravity.set(0, -9.82, 0); // Earth gravity
+        this.world.gravity.set(0, -7.5, 0); // Reduced gravity for better jumping
         this.world.broadphase = new CANNON.NaiveBroadphase();
         (this.world.solver as CANNON.GSSolver).iterations = 10;
         
