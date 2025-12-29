@@ -9,7 +9,7 @@ import { WinScreen } from "./components/WinScreen";
 import { MapSelector } from "./components/MapSelector";
 
 /**
- * Lobby 角色模型数据
+ * Lobby character model data
  */
 interface LobbyCharacterData {
   root: THREE.Group;
@@ -19,7 +19,7 @@ interface LobbyCharacterData {
 }
 
 /**
- * UI 管理器：管理游戏 UI 界面
+ * UI Manager: Manages game UI interface
  */
 export class UIManager {
   private uiLayer: HTMLElement;
@@ -31,11 +31,11 @@ export class UIManager {
   private uiRoot3D: THREE.Group | null = null;
   private pointerNDC: THREE.Vector2 = new THREE.Vector2();
 
-  // 角色选择 3D 模型
+  // Character selection 3D models
   private lobbyCharacterModels: Map<string, LobbyCharacterData> = new Map();
   private resources: Resources | null = null;
 
-  // UI 组件
+  // UI components
   private chatSystem: ChatSystem;
   private scoreScreen: ScoreScreen;
   private winScreen: WinScreen;
@@ -67,8 +67,8 @@ export class UIManager {
     return this.chatSystem.isOpen();
   }
 
-  public addChatMessage(nickname: string, message: string): void {
-    this.chatSystem.addMessage(nickname, message);
+  public addChatMessage(nickname: string, message: string, color?: string): void {
+    this.chatSystem.addMessage(nickname, message, color);
   }
 
   // ========== 资源和场景 ==========
@@ -242,13 +242,15 @@ export class UIManager {
     this.uiRoot3D.clear();
 
     const panel = this.createPanel(8, 4.5);
-    panel.position.set(0, 4.0, -10);
+    panel.position.set(0, 2.6, -10);
     this.uiRoot3D.add(panel);
 
-    const titleDiv = document.createElement("div");
-    titleDiv.className = "ui-title-overlay";
-    titleDiv.innerText = "Ultimate Chicken Horse 3D";
-    this.uiLayer.appendChild(titleDiv);
+    // Logo 图片替代标题文字
+    const logoImg = document.createElement("img");
+    logoImg.src = import.meta.env.BASE_URL + "logo.png";
+    logoImg.className = "ui-title-logo";
+    logoImg.alt = "Ultimate Chicken Horse 3D";
+    this.uiLayer.appendChild(logoImg);
 
     let nickname = "Player" + Math.floor(Math.random() * 1000);
 
@@ -265,7 +267,7 @@ export class UIManager {
     const hostBtn = this.createButtonPlane(2.4, 0.9, "HOST", () => {
       onHost(nickname);
     });
-    hostBtn.position.set(-2.4, 3.3, -9.9);
+    hostBtn.position.set(-2.4, 2.0, -9.9);
     this.uiRoot3D.add(hostBtn);
 
     const joinBtn = this.createButtonPlane(2.4, 0.9, "JOIN", () => {
@@ -273,7 +275,7 @@ export class UIManager {
       if (!hostId) return;
       onJoin(nickname, hostId);
     });
-    joinBtn.position.set(2.4, 3.3, -9.9);
+    joinBtn.position.set(2.4, 2.0, -9.9);
     this.uiRoot3D.add(joinBtn);
   }
 
@@ -284,7 +286,8 @@ export class UIManager {
     players: any[],
     isHost: boolean,
     onCharacterSelect: (charId: string) => void,
-    onStart: () => void
+    onStart: () => void,
+    onNicknameChange?: (newNickname: string) => void
   ): void {
     this.uiLayer.innerHTML = "";
 
@@ -299,7 +302,7 @@ export class UIManager {
     this.cleanupLobbyCharacters();
     this.uiRoot3D.clear();
 
-    // Host ID 显示
+    // Host ID display
     if (isHost) {
       const hostInfo = document.createElement("div");
       hostInfo.className = "ui-host-info ui-element";

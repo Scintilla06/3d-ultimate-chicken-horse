@@ -49,13 +49,13 @@ export interface MapBuilder {
 export type MapBuilderConstructor = new () => MapBuilder;
 
 /**
- * 可用地图列表
+ * Available map list
  */
 export const MAP_LIST: MapDefinition[] = [
   {
     id: "enchanted_forest",
-    name: "神秘森林",
-    description: "穿越古老的森林，跳跃木桩与岩石",
+    name: "Enchanted Forest",
+    description: "Journey through an ancient forest, jumping across stumps and rocks",
     previewColor: 0x228b22,
     skyColor: 0x87ceeb,
     fogColor: 0x9dd5e8,
@@ -64,8 +64,8 @@ export const MAP_LIST: MapDefinition[] = [
   },
   {
     id: "ice_kingdom",
-    name: "冰霜王国",
-    description: "穿越冰封的世界，小心滑落",
+    name: "Ice Kingdom",
+    description: "Traverse the frozen world, watch out for slippery surfaces",
     previewColor: 0x87ceeb,
     skyColor: 0xb0e0e6,
     fogColor: 0xc5e8f0,
@@ -74,8 +74,8 @@ export const MAP_LIST: MapDefinition[] = [
   },
   {
     id: "volcano_island",
-    name: "火山岛",
-    description: "穿越火山地带，躲避熔岩",
+    name: "Volcano Island",
+    description: "Cross the volcanic terrain, avoid the lava",
     previewColor: 0xff4500,
     skyColor: 0x2a1a0a,
     fogColor: 0x3a2010,

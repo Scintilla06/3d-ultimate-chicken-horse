@@ -7,13 +7,13 @@ import { BodyFactory } from "../../physics/BodyFactory";
 import { PlaceholderGenerator } from "../../utils/PlaceholderGenerator";
 
 /**
- * 神秘森林地图
+ * Enchanted Forest Map
  */
 export class EnchantedForestMap implements MapBuilder {
   definition: MapDefinition = {
     id: "enchanted_forest",
-    name: "神秘森林",
-    description: "穿越古老的森林，跳跃木桩与岩石",
+    name: "Enchanted Forest",
+    description: "Traverse the ancient forest, jump on tree stumps and rocks",
     previewColor: 0x228b22,
     skyColor: 0x87ceeb,
     fogColor: 0x9dd5e8,

@@ -7,14 +7,14 @@ import { BodyFactory } from "../../physics/BodyFactory";
 import { PlaceholderGenerator } from "../../utils/PlaceholderGenerator";
 
 /**
- * 冰霜王国地图 - 螺旋冰塔与滑冰坡道
- * 道路特色：螺旋上升 → 滑冰坡道 → 悬空冰桥网络
+ * Ice Kingdom Map - Spiral Ice Tower and Ice Slides
+ * Route features: Spiral ascent → Ice slides → Suspended ice bridge network
  */
 export class IceKingdomMap implements MapBuilder {
   definition: MapDefinition = {
     id: "ice_kingdom",
-    name: "冰霜王国",
-    description: "攀登螺旋冰塔，滑下冰坡，穿越悬空冰桥",
+    name: "Ice Kingdom",
+    description: "Climb the spiral ice tower, slide down ice slopes, cross suspended ice bridges",
     previewColor: 0x87ceeb,
     skyColor: 0xb0e0e6,
     fogColor: 0xc5e8f0,
@@ -127,7 +127,7 @@ export class IceKingdomMap implements MapBuilder {
   }
 
   /**
-   * 螺旋冰塔 - 环绕中央巨大冰柱的螺旋上升平台
+   * Spiral Ice Tower - Spiral ascending platforms around central ice pillar
    */
   private createSpiralIceTower(physicsWorld: PhysicsWorld): void {
     const centerX = 0;
@@ -136,21 +136,21 @@ export class IceKingdomMap implements MapBuilder {
     const totalHeight = 12;
     const numPlatforms = 10;
     
-    // 创建中央巨大冰柱
+    // Create central giant ice pillar
     this.createCentralIcePillar(centerX, centerZ, totalHeight + 2);
     
-    // 螺旋上升的平台
+    // Spiral ascending platforms
     for (let i = 0; i < numPlatforms; i++) {
-      const angle = (i / numPlatforms) * Math.PI * 2.5; // 2.5圈
+      const angle = (i / numPlatforms) * Math.PI * 2.5; // 2.5 circles
       const height = 1 + (i / numPlatforms) * totalHeight;
       const x = centerX + Math.cos(angle) * radius;
       const z = centerZ + Math.sin(angle) * radius;
       
-      // 平台大小逐渐变小
+      // Platform size gradually decreases
       const platformSize = 3.5 - i * 0.15;
       
-      const body = BodyFactory.createBox(platformSize, 0.8, platformSize, 0, new CANNON.Vec3(x, height, z));
-      (body as any).userData = { tag: "ground" };
+      const body = BodyFactory.createBox(platformSize, 0.8, platformSize, 0, new CANNON.Vec3(x, height, z), physicsWorld.iceMaterial);
+      (body as any).userData = { tag: "ice" };
       physicsWorld.world.addBody(body);
       
       const platform = this.createIcePlatform(platformSize, 0.8, platformSize);
@@ -158,7 +158,7 @@ export class IceKingdomMap implements MapBuilder {
       this.mapRoot.add(platform);
       (body as any).meshReference = platform;
       
-      // 添加冰锥装饰
+      // Add icicle decoration
       if (i % 3 === 0) {
         this.createHangingIcicles(x, height - 0.5, z, 3);
       }
@@ -215,18 +215,18 @@ export class IceKingdomMap implements MapBuilder {
   }
 
   /**
-   * 滑冰坡道 - 弧形的冰滑道下降
+   * Ice Slide - Curved ice slide descent
    */
   private createIceSlide(physicsWorld: PhysicsWorld): void {
     const startX = 8;
     const startZ = 33;
     const startY = 13;
     
-    // 滑道由多段组成，形成弧形
+    // Slide consists of multiple segments forming a curve
     const segments = 8;
     const slideLength = 4;
     const totalDrop = 6;
-    const curveAngle = Math.PI * 0.4; // 弧形角度
+    const curveAngle = Math.PI * 0.4; // Curve angle
     
     let currentX = startX;
     let currentZ = startZ;
@@ -237,16 +237,18 @@ export class IceKingdomMap implements MapBuilder {
       const segmentAngle = currentAngle + (i / segments) * curveAngle;
       const dropPerSegment = totalDrop / segments;
       
-      // 计算这段的倾斜角度
+      // Calculate tilt angle for this segment
       const tiltAngle = Math.atan2(dropPerSegment, slideLength);
       
-      const body = BodyFactory.createBox(3, 0.5, slideLength, 0, new CANNON.Vec3(currentX, currentY - dropPerSegment / 2, currentZ + slideLength / 2));
+      const body = BodyFactory.createBox(3, 0.5, slideLength, 0, new CANNON.Vec3(currentX, currentY - dropPerSegment / 2, currentZ + slideLength / 2), physicsWorld.iceMaterial);
       
-      // 设置倾斜
+      // Set tilt
       const quat = new CANNON.Quaternion();
       quat.setFromEuler(-tiltAngle, segmentAngle, 0);
       body.quaternion.copy(quat);
-      (body as any).userData = { tag: "ground" };
+      // Mark as ice_slope for auto-sliding when player is not moving
+      // slideDirection points DOWNHILL (opposite of the incline direction)
+      (body as any).userData = { tag: "ice_slope", tiltAngle: tiltAngle, slideDirection: { x: -Math.sin(segmentAngle), z: -Math.cos(segmentAngle) } };
       physicsWorld.world.addBody(body);
       
       const slideMesh = this.createSlideSegment(3, 0.5, slideLength);
@@ -255,15 +257,15 @@ export class IceKingdomMap implements MapBuilder {
       this.mapRoot.add(slideMesh);
       (body as any).meshReference = slideMesh;
       
-      // 更新下一段的起点
+      // Update starting point for next segment
       currentX += Math.sin(segmentAngle) * slideLength;
       currentZ += Math.cos(segmentAngle) * slideLength;
       currentY -= dropPerSegment;
     }
     
-    // 滑道终点平台
-    const endBody = BodyFactory.createBox(5, 1, 5, 0, new CANNON.Vec3(currentX, currentY - 0.5, currentZ + 2.5));
-    (endBody as any).userData = { tag: "ground" };
+    // Slide end platform
+    const endBody = BodyFactory.createBox(5, 1, 5, 0, new CANNON.Vec3(currentX, currentY - 0.5, currentZ + 2.5), physicsWorld.iceMaterial);
+    (endBody as any).userData = { tag: "ice" };
     physicsWorld.world.addBody(endBody);
     
     const endPlatform = this.createIcePlatform(5, 1, 5);
@@ -275,11 +277,11 @@ export class IceKingdomMap implements MapBuilder {
   private createSlideSegment(width: number, height: number, length: number): THREE.Group {
     const group = new THREE.Group();
     
-    // 滑道主体
+    // Slide main body
     const slideGeo = new THREE.BoxGeometry(width, height, length);
     const slideMat = new THREE.MeshStandardMaterial({
       color: 0xaaddee,
-      roughness: 0.02, // 非常光滑
+      roughness: 0.02, // Very smooth
       metalness: 0.4,
       transparent: true,
       opacity: 0.85
@@ -310,17 +312,17 @@ export class IceKingdomMap implements MapBuilder {
   }
 
   /**
-   * 悬空冰桥网络 - 多条可选路线的冰桥
+   * Suspended Ice Bridge Network - Multiple route options
    */
   private createSuspendedIceBridges(physicsWorld: PhysicsWorld): void {
-    // 起点连接平台 (从滑道终点连接)
+    // Starting connection platform (from slide end)
     const hubX = 15;
     const hubZ = 60;
     const hubY = 6;
     
-    // 中央枢纽平台
-    const hubBody = BodyFactory.createBox(6, 1, 6, 0, new CANNON.Vec3(hubX, hubY, hubZ));
-    (hubBody as any).userData = { tag: "ground" };
+    // Central hub platform
+    const hubBody = BodyFactory.createBox(6, 1, 6, 0, new CANNON.Vec3(hubX, hubY, hubZ), physicsWorld.iceMaterial);
+    (hubBody as any).userData = { tag: "ice" };
     physicsWorld.world.addBody(hubBody);
     
     const hubPlatform = this.createIcePlatform(6, 1, 6);
@@ -328,23 +330,23 @@ export class IceKingdomMap implements MapBuilder {
     this.mapRoot.add(hubPlatform);
     (hubBody as any).meshReference = hubPlatform;
     
-    // 连接滑道终点到枢纽的桥
+    // Bridge connecting slide end to hub
     this.createIceBridge(8, 6.5, 55, hubX, hubY, hubZ - 3, physicsWorld);
     
-    // 三条分叉路线
+    // Three branching routes
     
-    // 左路：窄冰桥，需要平衡
+    // Left path: Narrow ice bridge, requires balance
     this.createNarrowIcePath(hubX - 3, hubY, hubZ + 3, physicsWorld);
     
-    // 中路：跳跃冰块，需要精确跳跃
+    // Middle path: Jumping ice blocks, requires precision
     this.createJumpingIceBlocks(hubX, hubY - 1, hubZ + 5, physicsWorld);
     
-    // 右路：宽阔但有间隙
+    // Right path: Wide but with gaps
     this.createGappedIcePath(hubX + 3, hubY, hubZ + 3, physicsWorld);
     
-    // 三条路汇合的平台
-    const convergeBody = BodyFactory.createBox(8, 1, 6, 0, new CANNON.Vec3(20, 5, 75));
-    (convergeBody as any).userData = { tag: "ground" };
+    // Platform where three routes converge
+    const convergeBody = BodyFactory.createBox(8, 1, 6, 0, new CANNON.Vec3(20, 5, 75), physicsWorld.iceMaterial);
+    (convergeBody as any).userData = { tag: "ice" };
     physicsWorld.world.addBody(convergeBody);
     
     const convergePlatform = this.createIcePlatform(8, 1, 6);
@@ -363,13 +365,24 @@ export class IceKingdomMap implements MapBuilder {
     const midY = (y1 + y2) / 2;
     const midZ = (z1 + z2) / 2;
     
-    const body = BodyFactory.createBox(2.5, 0.6, length, 0, new CANNON.Vec3(midX, midY, midZ));
-    const angle = Math.atan2(dx, dz);
+    // Calculate tilt for ice_slope detection
     const tilt = Math.atan2(dy, Math.sqrt(dx * dx + dz * dz));
+    const angle = Math.atan2(dx, dz);
+    
+    const body = BodyFactory.createBox(2.5, 0.6, length, 0, new CANNON.Vec3(midX, midY, midZ), physicsWorld.iceMaterial);
     const quat = new CANNON.Quaternion();
     quat.setFromEuler(-tilt, angle, 0);
     body.quaternion.copy(quat);
-    (body as any).userData = { tag: "ground" };
+    
+    // Mark as ice_slope if tilted
+    // slideDirection points DOWNHILL - when dy < 0 (going down), slide towards the direction of the bridge
+    // The direction vector (sin(angle), cos(angle)) points from start to end, so we use -sign(dy) to always point downhill
+    if (Math.abs(tilt) > 0.05) {
+      const slideSign = dy < 0 ? 1 : -1; // If end is lower (dy < 0), slide towards end (+direction), otherwise slide back (-direction)
+      (body as any).userData = { tag: "ice_slope", tiltAngle: Math.abs(tilt), slideDirection: { x: Math.sin(angle) * slideSign, z: Math.cos(angle) * slideSign } };
+    } else {
+      (body as any).userData = { tag: "ice" };
+    }
     physicsWorld.world.addBody(body);
     
     const bridgeMesh = this.createIcePlatform(2.5, 0.6, length);

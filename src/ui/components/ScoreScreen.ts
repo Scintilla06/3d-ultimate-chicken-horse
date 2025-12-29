@@ -1,5 +1,5 @@
 /**
- * 分数结果数据
+ * Score Result Data
  */
 export interface ScoreData {
   nickname: string;
@@ -9,7 +9,7 @@ export interface ScoreData {
 }
 
 /**
- * 分数界面组件
+ * Score Screen Component
  */
 export class ScoreScreen {
   private uiLayer: HTMLElement;

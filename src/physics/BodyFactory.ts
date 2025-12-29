@@ -1,12 +1,13 @@
 import * as CANNON from 'cannon-es';
 
 export class BodyFactory {
-    static createBox(width: number, height: number, depth: number, mass: number, position: CANNON.Vec3): CANNON.Body {
+    static createBox(width: number, height: number, depth: number, mass: number, position: CANNON.Vec3, material?: CANNON.Material): CANNON.Body {
         const shape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
         const body = new CANNON.Body({
             mass: mass,
             position: position,
-            shape: shape
+            shape: shape,
+            material: material
         });
         return body;
     }
@@ -22,8 +23,9 @@ export class BodyFactory {
     }
 
     /**
-     * Creates a capsule-like body using two spheres.
-     * This is more stable for character controllers than a single cylinder or box.
+     * Creates a capsule-like body using a cylinder with a bottom sphere.
+     * The cylinder provides flat vertical sides to prevent edge-climbing,
+     * while the bottom sphere helps with smooth movement over terrain.
      * @param radius Radius of the character
      * @param height Total height of the character
      * @param mass Mass
@@ -34,30 +36,21 @@ export class BodyFactory {
             mass: mass,
             position: position,
             fixedRotation: true,
-            material: material
+            material: material,
+            linearDamping: 0.1, // 添加线性阻尼减少抖动
         });
 
-        // Bottom Sphere (Feet)
-        const sphereShape = new CANNON.Sphere(radius);
-        // Offset so the bottom of the sphere is at local y=0 (relative to body pivot if pivot was at bottom)
-        // But usually body position is center. 
-        // Let's keep the convention that body.position is the pivot point (feet).
+        // Use a cylinder for the main body - flat sides prevent edge-climbing
+        const cylinderHeight = height - radius; // Leave room for bottom sphere
+        const cylinderShape = new CANNON.Cylinder(radius, radius, cylinderHeight, 12);
         
-        // Bottom sphere center: radius
-        body.addShape(sphereShape, new CANNON.Vec3(0, radius, 0));
+        // Rotate cylinder to be upright (CANNON cylinders are along Y by default, but we need to check)
+        const cylinderOffset = new CANNON.Vec3(0, radius + cylinderHeight / 2, 0);
+        body.addShape(cylinderShape, cylinderOffset);
 
-        // Top Sphere (Head)
-        // Top of character is at 'height'.
-        // Top sphere center: height - radius
-        // Ensure we don't place it lower than bottom sphere
-        const topSphereY = Math.max(radius, height - radius);
-        body.addShape(sphereShape, new CANNON.Vec3(0, topSphereY, 0));
-
-        // If height is significantly larger than 2*radius, we might want a middle sphere or cylinder
-        // For height 1.2 and radius 0.4:
-        // Bottom center: 0.4
-        // Top center: 0.8
-        // Gap is 0.4. Spheres overlap significantly. This is fine.
+        // Bottom sphere for smooth ground contact
+        const bottomSphere = new CANNON.Sphere(radius * 0.9); // Slightly smaller to not poke out sides
+        body.addShape(bottomSphere, new CANNON.Vec3(0, radius * 0.9, 0));
 
         return body;
     }

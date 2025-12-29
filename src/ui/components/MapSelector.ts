@@ -1,7 +1,7 @@
 import { MAP_LIST, MapDefinition } from "../../core/maps/MapDefinition";
 
 /**
- * 地图选择组件
+ * Map Selector Component
  */
 export class MapSelector {
   private container: HTMLElement | null = null;
@@ -11,7 +11,7 @@ export class MapSelector {
   constructor() {}
 
   /**
-   * 显示地图选择界面
+   * Show map selection interface
    */
   public show(
     parent: HTMLElement,
@@ -26,7 +26,7 @@ export class MapSelector {
 
     const title = document.createElement("h3");
     title.className = "map-selector-title";
-    title.innerText = "选择地图";
+    title.innerText = "Select Map";
     this.container.appendChild(title);
 
     const mapsContainer = document.createElement("div");
@@ -72,7 +72,7 @@ export class MapSelector {
     // 投票计数
     const voteCount = document.createElement("div");
     voteCount.className = "map-card-votes";
-    voteCount.innerText = "0 票";
+    voteCount.innerText = "0 votes";
     card.appendChild(voteCount);
 
     card.onclick = () => {
@@ -127,7 +127,7 @@ export class MapSelector {
       const voteEl = cardEl.querySelector(".map-card-votes");
       if (voteEl) {
         const count = voteCounts[mapId] || 0;
-        voteEl.textContent = `${count} 票`;
+        voteEl.textContent = `${count} vote${count !== 1 ? 's' : ''}`;
       }
     });
   }

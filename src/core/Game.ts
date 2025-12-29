@@ -88,6 +88,19 @@ export class Game {
   private mapVotes: { [playerId: string]: string } = {};
   private selectedMapId: string = "enchanted_forest";
 
+  // 玩家颜色系统
+  private static readonly PLAYER_COLORS: string[] = [
+    "#FF6B6B", // 红色
+    "#4ECDC4", // 青色
+    "#FFE66D", // 黄色
+    "#95E1D3", // 薄荷绿
+    "#F38181", // 珊瑚色
+    "#AA96DA", // 淡紫色
+    "#FCBAD3", // 粉红色
+    "#A8D8EA", // 天蓝色
+  ];
+  private playerColorMap: Map<string, string> = new Map();
+
   // 游戏状态
   private state: GameState = -1 as GameState;
   private raycaster: THREE.Raycaster = new THREE.Raycaster();
@@ -216,12 +229,14 @@ export class Game {
 
   private setupChatSystem(): void {
     this.uiManager.setChatCallback((message: string) => {
+      const myColor = this.getPlayerColor(this.myPlayerInfo.id);
       const chatPayload: ChatPayload = {
         nickname: this.myPlayerInfo.nickname,
         message: message,
+        playerId: this.myPlayerInfo.id,
       };
 
-      this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message);
+      this.uiManager.addChatMessage(chatPayload.nickname, chatPayload.message, myColor);
       this.networkManager.send({
         t: PacketType.CHAT,
         p: chatPayload,
@@ -460,6 +475,9 @@ export class Game {
         case PacketType.CHARACTER_SELECT:
           this.handleCharacterSelectPacket(packet, senderId);
           break;
+        case PacketType.NICKNAME_CHANGE:
+          this.handleNicknameChangePacket(packet, senderId);
+          break;
         case PacketType.START_GAME:
           if (!this.networkManager.isHostUser()) this.startGame();
           break;
@@ -513,9 +531,14 @@ export class Game {
           break;
         case PacketType.CHAT:
           const chatPayload = packet.p as ChatPayload;
+          // 根据发送者 ID 获取玩家颜色
+          const senderColor = chatPayload.playerId 
+            ? this.getPlayerColor(chatPayload.playerId) 
+            : undefined;
           this.uiManager.addChatMessage(
             chatPayload.nickname,
-            chatPayload.message
+            chatPayload.message,
+            senderColor
           );
           if (this.networkManager.isHostUser()) {
             this.networkManager.send(packet);
@@ -610,7 +633,19 @@ export class Game {
     }
   }
 
-  // ========== 地图选择处理 ==========
+  private handleNicknameChangePacket(packet: Packet, senderId: string): void {
+    if (!this.networkManager.isHostUser()) return;
+
+    const newNickname = packet.p.nickname;
+    const sender = this.lobbyPlayers.find((pl) => pl.id === senderId);
+
+    if (sender && newNickname && newNickname.trim()) {
+      sender.nickname = newNickname.trim();
+      this.broadcastLobbyUpdate();
+    }
+  }
+
+  // ========== Map Selection Handling ==========
 
   private handleMapSelectPacket(packet: Packet, senderId: string): void {
     if (!this.networkManager.isHostUser()) return;
@@ -771,10 +806,10 @@ export class Game {
             (p) => p.character && p.character !== ""
           );
           if (allReady) {
-            // 根据投票选择地图
+            // Choose map based on votes
             if (this.networkManager.isHostUser()) {
               this.selectedMapId = MapSelector.chooseMapByVotes(this.mapVotes);
-              // 广播选中的地图
+              // Broadcast chosen map
               this.networkManager.send({
                 t: PacketType.MAP_CHOSEN,
                 p: { mapId: this.selectedMapId } as MapChosenPayload,
@@ -784,6 +819,23 @@ export class Game {
             this.startGame();
           } else {
             this.uiManager.showMessage("All players must select a character!");
+          }
+        },
+        (newNickname) => {
+          // Handle nickname change
+          this.myPlayerInfo.nickname = newNickname;
+          const me = this.lobbyPlayers.find(
+            (p) => p.id === this.myPlayerInfo.id
+          );
+          if (me) me.nickname = newNickname;
+          
+          if (this.networkManager.isHostUser()) {
+            this.broadcastLobbyUpdate();
+          } else {
+            this.networkManager.send({
+              t: PacketType.NICKNAME_CHANGE,
+              p: { nickname: newNickname },
+            });
           }
         }
       );
@@ -805,8 +857,18 @@ export class Game {
     // 加载选中的地图
     await this.levelManager.loadMap(this.selectedMapId);
 
+    // 初始化玩家颜色映射
+    this.initPlayerColors();
+
     if (this.myPlayerInfo.character) {
       this.updateLocalPlayerModel(this.myPlayerInfo.character);
+    }
+
+    // 为本地玩家设置名字标签
+    const localPlayer = this.players.get("local");
+    if (localPlayer) {
+      const myColor = this.getPlayerColor(this.myPlayerInfo.id);
+      localPlayer.rig.setNameLabel(this.myPlayerInfo.nickname, myColor);
     }
 
     this.lobbyPlayers.forEach((p) => {
@@ -822,6 +884,10 @@ export class Game {
     const appearance = getCharacterAppearance(info.character);
     const rig = CharacterRig.createFromAppearance(this.resources, appearance);
     this.scene.add(rig.root);
+
+    // 设置玩家名字标签
+    const playerColor = this.getPlayerColor(info.id);
+    rig.setNameLabel(info.nickname, playerColor);
 
     const playerBody = BodyFactory.createPlayerBody(
       0.4,
@@ -860,6 +926,35 @@ export class Game {
       player.rig.updateFromBody(player.body);
       index++;
     });
+  }
+
+  /**
+   * 初始化玩家颜色映射
+   */
+  private initPlayerColors(): void {
+    this.playerColorMap.clear();
+    this.lobbyPlayers.forEach((player, index) => {
+      const color = Game.PLAYER_COLORS[index % Game.PLAYER_COLORS.length];
+      this.playerColorMap.set(player.id, color);
+    });
+  }
+
+  /**
+   * 获取玩家的颜色
+   */
+  public getPlayerColor(playerId: string): string {
+    return this.playerColorMap.get(playerId) || "#FFFFFF";
+  }
+
+  /**
+   * 根据玩家 ID 获取昵称
+   */
+  public getPlayerNickname(playerId: string): string {
+    if (playerId === this.myPlayerInfo.id) {
+      return this.myPlayerInfo.nickname;
+    }
+    const player = this.lobbyPlayers.find(p => p.id === playerId);
+    return player?.nickname || "Unknown";
   }
 
   private processPickRequest(index: number, senderId: string): void {
@@ -1196,6 +1291,25 @@ export class Game {
       this.state === GameState.BUILD_VIEW ||
       this.state === GameState.BUILD_PLACE
     ) {
+      // Move build camera center with WASD in build view mode
+      if (this.state === GameState.BUILD_VIEW) {
+        const hasMoveInput = 
+          this.inputManager.isKeyPressed("KeyW") ||
+          this.inputManager.isKeyPressed("KeyS") ||
+          this.inputManager.isKeyPressed("KeyA") ||
+          this.inputManager.isKeyPressed("KeyD");
+        
+        if (hasMoveInput) {
+          this.cameraController.moveBuildCenter(
+            this.inputManager.isKeyPressed("KeyW"),
+            this.inputManager.isKeyPressed("KeyS"),
+            this.inputManager.isKeyPressed("KeyA"),
+            this.inputManager.isKeyPressed("KeyD"),
+            0.5
+          );
+          this.cameraController.updateBuildViewCamera(0); // Update camera position after moving center
+        }
+      }
       if (this.state === GameState.BUILD_PLACE) {
         this.buildSystem.updateGhostValidityColor();
       }
@@ -1260,7 +1374,7 @@ export class Game {
           this.inputManager.isKeyPressed("ShiftLeft") ||
           this.inputManager.isKeyPressed("ShiftRight"),
       };
-      localPlayer.setInput(input, this.cameraController.angleY);
+      localPlayer.setInput(input, this.cameraController.angleY, 1 / 60);
 
       const targetPos = new THREE.Vector3();
       localPlayer.rig.root.getWorldPosition(targetPos);
@@ -1307,8 +1421,11 @@ export class Game {
           const delay = localPlayer.hasWon ? 0 : 2000;
           setTimeout(() => {
             document.exitPointerLock();
-            this.cameraController.setPosition(8, 6, 22);
-            this.cameraController.lookAt(0, 2, 25);
+            
+            // 死亡后切换到出生区域上方观看，而不是直接进入自由观战模式
+            // 出生区域位于 (0, 0, 0) 附近
+            this.cameraController.setPosition(0, 12, -8);
+            this.cameraController.lookAt(0, 0, 12);
 
             if (this.networkManager.isHostUser()) {
               if (this.playersFinishedTurn.size >= this.lobbyPlayers.length) {

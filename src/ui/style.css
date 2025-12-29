@@ -1,3 +1,17 @@
+/* JotiOne 字体定义 */
+@font-face {
+    font-family: 'JotiOne';
+    src: url('/fonts/JotiOne-Regular.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* 全局字体应用 */
+* {
+    font-family: 'JotiOne', 'Comic Sans MS', 'Chalkboard SE', sans-serif;
+}
+
 .ui-message {
     position: absolute;
     top: 20%;
@@ -7,18 +21,48 @@
     color: white;
     padding: 20px;
     border-radius: 10px;
-    font-family: sans-serif;
+    font-family: 'JotiOne', sans-serif;
     font-size: 24px;
     pointer-events: none;
 }
 
+/* Logo 图片样式 */
+.ui-title-logo {
+    position: absolute;
+    top: 2%;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 760px;
+    max-height: 340px;
+    width: 96%;
+    height: auto;
+    object-fit: contain;
+    pointer-events: none;
+    animation: logo-pop-in 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes logo-pop-in {
+    0% {
+        opacity: 0;
+        transform: translateX(-50%) scale(0.3);
+    }
+    50% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 1;
+        transform: translateX(-50%) scale(1);
+    }
+}
+
+/* 保留原标题样式以便其他地方使用 */
 .ui-title-overlay {
     position: absolute;
     top: 10%;
     left: 50%;
     transform: translateX(-50%);
     font-size: 32px;
-    font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
     color: #3b2b1a;
     text-shadow: 0 3px 0 #f0e6d2, 0 6px 8px rgba(0, 0, 0, 0.4);
     pointer-events: none;
@@ -28,7 +72,7 @@
     position: absolute;
     transform: translate(-50%, -50%);
     font-size: 18px;
-    font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
     color: #3b2b1a;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
     pointer-events: none;
@@ -46,7 +90,7 @@
     border: 2px solid #333;
     border-radius: 999px;
     padding: 6px 14px;
-    font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
     color: #333;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
 }
@@ -84,16 +128,65 @@
 
 .ui-name-hint {
     position: absolute;
-    top: 18%;
+    top: 32%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, rgba(255, 200, 87, 0.95), rgba(255, 160, 50, 0.95));
+    color: #222;
+    padding: 10px 20px;
+    border-radius: 999px;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(255, 200, 87, 0.5);
+    transition: transform 0.2s, box-shadow 0.2s;
+    border: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.ui-name-hint:hover {
+    transform: translateX(-50%) scale(1.05);
+    box-shadow: 0 6px 20px rgba(255, 200, 87, 0.7);
+}
+
+.ui-name-editor {
+    position: absolute;
+    top: 32%;
     left: 50%;
     transform: translateX(-50%);
     background: rgba(0, 0, 0, 0.85);
     color: #fff;
-    padding: 6px 14px;
+    padding: 8px 16px;
     border-radius: 999px;
-    font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
     font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ui-name-editor .nickname-label {
+    color: #aaa;
+}
+
+.ui-name-editor .nickname-value {
+    color: #ffc857;
+    font-weight: bold;
+}
+
+.ui-name-editor .nickname-edit-btn {
+    border: none;
+    background: #ffc857;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
     cursor: pointer;
+    font-family: inherit;
+    color: #333;
+}
+
+.ui-name-editor .nickname-edit-btn:hover {
+    background: #ffd97b;
 }
 
 /* Chat UI */
@@ -103,7 +196,7 @@
     left: 10px;
     width: 320px;
     pointer-events: none;
-    font-family: "Arial", sans-serif;
+    font-family: 'JotiOne', "Arial", sans-serif;
     z-index: 100;
 }
 
@@ -188,7 +281,7 @@
     border: 3px solid #3b2b1a;
     border-radius: 12px;
     padding: 16px 20px;
-    font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+    font-family: 'JotiOne', "Comic Sans MS", "Chalkboard SE", sans-serif;
 }
 
 .map-selector-title {

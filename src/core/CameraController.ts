@@ -13,6 +13,10 @@ export class CameraController {
 
   // 建造模式相机参数
   public buildAngle: number = 0;
+  public buildCenterX: number = 0;
+  public buildCenterZ: number = 12.5;
+  public buildRadius: number = 30;
+  public buildHeight: number = 20;
 
   // 平滑过渡参数
   private lerpActive: boolean = false;
@@ -116,21 +120,59 @@ export class CameraController {
   }
 
   /**
-   * 更新建造模式相机（环绕地图中心）
+   * 更新建造模式相机（环绕可移动的中心点）
    */
   public updateBuildViewCamera(
-    movementX: number,
-    centerX: number = 0,
-    centerZ: number = 12.5,
-    radius: number = 30,
-    height: number = 20
+    movementX: number
   ): void {
     this.buildAngle -= movementX * 0.005;
 
-    this.camera.position.x = centerX + Math.sin(this.buildAngle) * radius;
-    this.camera.position.y = height;
-    this.camera.position.z = centerZ + Math.cos(this.buildAngle) * radius;
-    this.camera.lookAt(centerX, 1, centerZ);
+    this.camera.position.x = this.buildCenterX + Math.sin(this.buildAngle) * this.buildRadius;
+    this.camera.position.y = this.buildHeight;
+    this.camera.position.z = this.buildCenterZ + Math.cos(this.buildAngle) * this.buildRadius;
+    this.camera.lookAt(this.buildCenterX, 1, this.buildCenterZ);
+  }
+
+  /**
+   * 移动建造模式相机中心点（WASD控制）
+   */
+  public moveBuildCenter(
+    forward: boolean,
+    backward: boolean,
+    left: boolean,
+    right: boolean,
+    speed: number = 0.5
+  ): void {
+    // 基于当前相机朝向计算移动方向
+    const forwardX = -Math.sin(this.buildAngle);
+    const forwardZ = -Math.cos(this.buildAngle);
+    const rightX = Math.cos(this.buildAngle);
+    const rightZ = -Math.sin(this.buildAngle);
+
+    if (forward) {
+      this.buildCenterX += forwardX * speed;
+      this.buildCenterZ += forwardZ * speed;
+    }
+    if (backward) {
+      this.buildCenterX -= forwardX * speed;
+      this.buildCenterZ -= forwardZ * speed;
+    }
+    if (left) {
+      this.buildCenterX -= rightX * speed;
+      this.buildCenterZ -= rightZ * speed;
+    }
+    if (right) {
+      this.buildCenterX += rightX * speed;
+      this.buildCenterZ += rightZ * speed;
+    }
+  }
+
+  /**
+   * 调整建造模式相机距离（滚轮控制）
+   */
+  public adjustBuildZoom(delta: number): void {
+    this.buildRadius = Math.max(10, Math.min(80, this.buildRadius + delta * 2));
+    this.buildHeight = Math.max(8, Math.min(50, this.buildHeight + delta));
   }
 
   /**
@@ -143,6 +185,10 @@ export class CameraController {
     height: number = 20
   ): void {
     this.buildAngle = 0;
+    this.buildCenterX = centerX;
+    this.buildCenterZ = centerZ;
+    this.buildRadius = radius;
+    this.buildHeight = height;
     this.camera.position.set(
       centerX + Math.sin(this.buildAngle) * radius,
       height,

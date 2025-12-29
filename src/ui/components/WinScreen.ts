@@ -3,7 +3,7 @@ import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Resources } from "../../core/Resources";
 
 /**
- * 赢家界面组件
+ * Winner Screen Component
  */
 export class WinScreen {
   private uiLayer: HTMLElement;

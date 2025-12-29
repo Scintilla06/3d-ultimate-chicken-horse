@@ -79,13 +79,17 @@ export class ChatSystem {
     this.close();
   }
 
-  public addMessage(nickname: string, message: string): void {
+  public addMessage(nickname: string, message: string, color?: string): void {
     const msgDiv = document.createElement("div");
     msgDiv.className = "chat-message";
 
     const nickSpan = document.createElement("span");
     nickSpan.className = "nickname";
     nickSpan.textContent = nickname + ":";
+    // 使用玩家颜色，如果没有提供则使用默认颜色
+    if (color) {
+      nickSpan.style.color = color;
+    }
     msgDiv.appendChild(nickSpan);
 
     const textSpan = document.createElement("span");

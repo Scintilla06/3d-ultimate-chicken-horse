@@ -12,6 +12,7 @@ export enum PacketType {
     JOIN = 'J',
     WELCOME = 'W',
     CHARACTER_SELECT = 'C_Sel',
+    NICKNAME_CHANGE = 'N_Chg',  // Player changes nickname
     LOBBY_UPDATE = 'L_Upd',
     START_GAME = 'Start',
     PARTY_BOX_UPDATE = 'P_Box',
@@ -21,14 +22,16 @@ export enum PacketType {
     SHOW_SCORE = 'Score',
     CHAT = 'Chat',
     GAME_WIN = 'Win',
-    MAP_SELECT = 'M_Sel',       // 玩家选择地图
-    MAP_VOTES = 'M_Votes',      // 广播所有玩家的地图投票
-    MAP_CHOSEN = 'M_Chosen'     // 最终选中的地图
+    MAP_SELECT = 'M_Sel',       // Player selects map
+    MAP_VOTES = 'M_Votes',      // Broadcast all map votes
+    MAP_CHOSEN = 'M_Chosen'     // Final chosen map
 }
 
 export interface ChatPayload {
     nickname: string;
     message: string;
+    color?: string;  // 玩家名字颜色
+    playerId?: string; // 发送者 ID，用于接收方获取颜色
 }
 
 export interface MapSelectPayload {
@@ -64,5 +67,5 @@ export interface PlayerInfo {
     character: string;
     isHost: boolean;
     isReady: boolean;
-    selectedMap?: string; // 玩家选择的地图
+    selectedMap?: string; // Player's selected map
 }

@@ -7,14 +7,14 @@ import { BodyFactory } from "../../physics/BodyFactory";
 import { PlaceholderGenerator } from "../../utils/PlaceholderGenerator";
 
 /**
- * 火山岛地图 - Z字峡谷与垂直攀爬
- * 道路特色：Z字形熔岩峡谷 → 圆形跳跃平台 → 垂直攀爬火山壁
+ * Volcano Island Map - Z-shaped Canyon and Vertical Climbing
+ * Route features: Z-shaped lava canyon → Circular jumping platforms → Vertical climbing wall
  */
 export class VolcanoIslandMap implements MapBuilder {
   definition: MapDefinition = {
     id: "volcano_island",
-    name: "火山岛",
-    description: "穿越Z字峡谷，踏过圆盘，攀登火山壁",
+    name: "Volcano Island",
+    description: "Cross the Z-canyon, step on discs, climb the volcano wall",
     previewColor: 0xff4500,
     skyColor: 0x2a1a0a,
     fogColor: 0x3a2010,

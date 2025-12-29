@@ -25,6 +25,9 @@ export class CharacterRig {
   private actions: Map<string, THREE.AnimationAction> = new Map();
   private currentAction: THREE.AnimationAction | null = null;
 
+  // Name label sprite displayed above character
+  private nameLabel: THREE.Sprite | null = null;
+
   private constructor(
     root: THREE.Group,
     nodes: SimpleRigNodes,
@@ -35,6 +38,75 @@ export class CharacterRig {
     this.nodes = nodes;
     this.mixer = mixer;
     this.actions = actions;
+  }
+
+  /**
+   * Creates a text sprite for displaying player name above character
+   */
+  private static createNameSprite(name: string, color: string): THREE.Sprite {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d")!;
+    canvas.width = 256;
+    canvas.height = 64;
+
+    // Background with rounded corners
+    context.fillStyle = "rgba(0, 0, 0, 0.5)";
+    const radius = 12;
+    context.beginPath();
+    context.roundRect(10, 10, canvas.width - 20, canvas.height - 20, radius);
+    context.fill();
+
+    // Text
+    context.font = "bold 28px JotiOne, Arial, sans-serif";
+    context.fillStyle = color;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(name, canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ 
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(1.5, 0.4, 1);
+    return sprite;
+  }
+
+  /**
+   * Set the player name to display above the character
+   */
+  public setNameLabel(name: string, color: string): void {
+    // Remove existing label if any
+    if (this.nameLabel) {
+      this.root.remove(this.nameLabel);
+      this.nameLabel.material.map?.dispose();
+      this.nameLabel.material.dispose();
+    }
+
+    this.nameLabel = CharacterRig.createNameSprite(name, color);
+    this.nameLabel.position.set(0, 2.0, 0); // Above character head
+    this.root.add(this.nameLabel);
+  }
+
+  /**
+   * Hide the name label
+   */
+  public hideNameLabel(): void {
+    if (this.nameLabel) {
+      this.nameLabel.visible = false;
+    }
+  }
+
+  /**
+   * Show the name label
+   */
+  public showNameLabel(): void {
+    if (this.nameLabel) {
+      this.nameLabel.visible = true;
+    }
   }
 
   public static createFromAppearance(
