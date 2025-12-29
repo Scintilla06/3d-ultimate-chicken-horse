@@ -242,7 +242,7 @@ export class UIManager {
     this.uiRoot3D.clear();
 
     const panel = this.createPanel(8, 4.5);
-    panel.position.set(0, 2.6, -10);
+    panel.position.set(0, 1.8, -10);
     this.uiRoot3D.add(panel);
 
     // Logo 图片替代标题文字
@@ -267,7 +267,7 @@ export class UIManager {
     const hostBtn = this.createButtonPlane(2.4, 0.9, "HOST", () => {
       onHost(nickname);
     });
-    hostBtn.position.set(-2.4, 2.0, -9.9);
+    hostBtn.position.set(-2.4, 1.2, -9.9);
     this.uiRoot3D.add(hostBtn);
 
     const joinBtn = this.createButtonPlane(2.4, 0.9, "JOIN", () => {
@@ -275,7 +275,7 @@ export class UIManager {
       if (!hostId) return;
       onJoin(nickname, hostId);
     });
-    joinBtn.position.set(2.4, 2.0, -9.9);
+    joinBtn.position.set(2.4, 1.2, -9.9);
     this.uiRoot3D.add(joinBtn);
   }
 

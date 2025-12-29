@@ -128,7 +128,7 @@
 
 .ui-name-hint {
     position: absolute;
-    top: 32%;
+    top: 38%;
     left: 50%;
     transform: translateX(-50%);
     background: linear-gradient(135deg, rgba(255, 200, 87, 0.95), rgba(255, 160, 50, 0.95));
@@ -151,7 +151,7 @@
 
 .ui-name-editor {
     position: absolute;
-    top: 32%;
+    top: 38%;
     left: 50%;
     transform: translateX(-50%);
     background: rgba(0, 0, 0, 0.85);
