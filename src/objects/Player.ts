@@ -21,8 +21,6 @@ export class Player extends Character {
   // Stuck detection: track position to detect when character is stuck on edges
   private lastPosition: CANNON.Vec3 = new CANNON.Vec3();
   private stuckTimer: number = 0;
-  private readonly STUCK_THRESHOLD: number = 0.3; // Time before considering stuck
-  private readonly STUCK_MOVE_THRESHOLD: number = 0.05; // Minimum movement to not be stuck
 
   public onJumpStart?: () => void;
   public onCoinCollect?: () => void;
@@ -39,8 +37,21 @@ export class Player extends Character {
   private isAgainstWall: boolean = false;
   private wallContactNormal: CANNON.Vec3 = new CANNON.Vec3();
 
+  // Cached local vertical extents of the physics compound (relative to body frame)
+  private localBottomY: number = 0;
+  private localTopY: number = 1;
+
+  private getHeight(): number {
+    return Math.max(0.2, this.localTopY - this.localBottomY);
+  }
+
   constructor(rig: CharacterRig, body: CANNON.Body) {
     super(rig, body);
+
+    // Cache collider extents once (compound shapes are static)
+    const { minY, maxY } = this.computeLocalYExtents();
+    this.localBottomY = minY;
+    this.localTopY = maxY;
 
     // Collision Listener
     this.body.addEventListener("collide", (e: any) => {
@@ -64,7 +75,7 @@ export class Player extends Character {
         // CRITICAL FIX: If touching a wall and have small upward velocity,
         // this is likely the physics engine pushing us up against the wall.
         // Cancel this upward movement to prevent wall climbing.
-        if (this.body.velocity.y > 0 && this.body.velocity.y < 3.0) {
+        if (!this.isJumping && this.body.velocity.y > 0 && this.body.velocity.y < 3.0) {
           // Only cancel if not in a legitimate jump (velocity would be higher)
           const groundInfo = this.getGroundInfo();
           if (!groundInfo.grounded) {
@@ -110,8 +121,14 @@ export class Player extends Character {
   public lastHitBy: string | null = null;
 
   public update(delta: number) {
-    // Reset wall contact flag each frame (will be set again if still touching)
-    this.isAgainstWall = false;
+    // Debug logging disabled
+    // this.debugTimer += delta;
+    // if (this.debugTimer > 0.25) {
+    //   this.debugTimer = 0;
+    //   const groundInfo = this.getGroundInfo();
+    //   console.log(`[DEBUG] grounded=${groundInfo.grounded}, isAgainstWall=${this.isAgainstWall}, vel.y=${this.body.velocity.y.toFixed(2)}, pos.y=${this.body.position.y.toFixed(2)}`);
+    // }
+    
     super.setAnimState(this.animState);
     super.update(delta);
   }
@@ -122,17 +139,20 @@ export class Player extends Character {
     const radius = 0.4;
     const checkDist = radius + 0.2; // Slightly more than radius
 
-    // Check at feet, center, head
-    const heights = [0.2, 0.6, 1.0];
+    // Check at feet, center, head (relative to actual collider height)
+    const height = this.getHeight();
+    const heights = [0.2, height * 0.5, Math.max(0.2, height - 0.2)];
     const vec = new CANNON.Vec3(
       direction.x * checkDist,
       0,
       direction.z * checkDist
     );
 
+    const footY = this.getFootWorldY();
+
     for (const h of heights) {
       const start = this.body.position.clone();
-      start.y += h;
+      start.y = footY + h;
       const end = start.vadd(vec);
 
       const result = new CANNON.RaycastResult();
@@ -153,6 +173,95 @@ export class Player extends Character {
     return null;
   }
 
+  private computeLocalYExtents(): { minY: number; maxY: number } {
+    // Compute min/max local Y across all shapes, including offsets and per-shape orientations.
+    // This is the only robust way to map body.position.y to actual feet/head when using compounds.
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    const shapes = this.body.shapes;
+    const offsets = this.body.shapeOffsets;
+    const orientations = this.body.shapeOrientations;
+
+    for (let i = 0; i < shapes.length; i++) {
+      const shape = shapes[i] as any;
+      const offset = offsets?.[i] ?? new CANNON.Vec3(0, 0, 0);
+      const orientation = orientations?.[i] ?? new CANNON.Quaternion(0, 0, 0, 1);
+
+      // Fast paths for common primitives
+      if (shape.type === CANNON.Shape.types.SPHERE) {
+        const r = (shape as CANNON.Sphere).radius;
+        minY = Math.min(minY, offset.y - r);
+        maxY = Math.max(maxY, offset.y + r);
+        continue;
+      }
+
+      if (shape.type === CANNON.Shape.types.BOX) {
+        const hy = (shape as CANNON.Box).halfExtents.y;
+        minY = Math.min(minY, offset.y - hy);
+        maxY = Math.max(maxY, offset.y + hy);
+        continue;
+      }
+
+      // ConvexPolyhedron-like shapes: use actual vertices (respects orientation)
+      const vertices: CANNON.Vec3[] | undefined = shape.vertices;
+      if (Array.isArray(vertices) && vertices.length > 0) {
+        const tmp = new CANNON.Vec3();
+        for (const v of vertices) {
+          orientation.vmult(v, tmp);
+          const y = offset.y + tmp.y;
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
+        }
+        continue;
+      }
+
+      // Fallback: bounding sphere (conservative)
+      const bs = typeof shape.boundingSphereRadius === "number" ? shape.boundingSphereRadius : 0.5;
+      minY = Math.min(minY, offset.y - bs);
+      maxY = Math.max(maxY, offset.y + bs);
+    }
+
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+      return { minY: 0, maxY: 1 };
+    }
+    return { minY, maxY };
+  }
+
+  private computeWallContactFromContacts(): { againstWall: boolean; normal: CANNON.Vec3 } {
+    // Derive wall contact from current solver contacts (per-frame, not sticky).
+    const normalOut = new CANNON.Vec3(0, 0, 0);
+    if (!this.body.world) return { againstWall: false, normal: normalOut };
+
+    for (const c of this.body.world.contacts) {
+      const normal = new CANNON.Vec3();
+      if (c.bi === this.body) {
+        // normal points from bi to bj; we want normal pointing away from the other body
+        c.ni.negate(normal);
+      } else if (c.bj === this.body) {
+        normal.copy(c.ni);
+      } else {
+        continue;
+      }
+
+      // Mostly horizontal normal => wall-ish contact
+      const ay = Math.abs(normal.y);
+      if (ay > 0.25) continue;
+
+      // Ignore near-zero normals
+      const len2 = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
+      if (len2 < 1e-6) continue;
+
+      normalOut.copy(normal);
+      return { againstWall: true, normal: normalOut };
+    }
+    return { againstWall: false, normal: normalOut };
+  }
+
+  private getFootWorldY(): number {
+    return this.body.position.y + this.localBottomY;
+  }
+
   public setInput(
     input: { x: number; y: number; jump: boolean; sprint: boolean },
     cameraAngleY: number,
@@ -163,31 +272,44 @@ export class Player extends Character {
     const groundInfo = this.getGroundInfo();
     const grounded = groundInfo.grounded;
 
+    // Recompute wall contact per-frame (collide event is not reliable as a persistent state)
+    const wallContact = this.computeWallContactFromContacts();
+    this.isAgainstWall = wallContact.againstWall;
+    if (wallContact.againstWall) {
+      this.wallContactNormal.copy(wallContact.normal);
+    }
+
     // --- Stuck Detection and Recovery ---
-    // Check if character is stuck on an edge (not grounded but barely moving)
+    // Detect when character is stuck on an edge (physics engine pushing against penetration)
+    // Symptoms: not grounded, barely moving, velocity near zero
     if (!grounded) {
       const posDiff = this.body.position.vsub(this.lastPosition);
-      const moveDistance = posDiff.length();
+      const horizontalMove = Math.sqrt(posDiff.x * posDiff.x + posDiff.z * posDiff.z);
+      const verticalMove = Math.abs(posDiff.y);
       
-      // If barely moving and has small upward velocity (being pushed by collision)
-      if (moveDistance < this.STUCK_MOVE_THRESHOLD && Math.abs(this.body.velocity.y) < 2.0) {
+      // Stuck condition: almost no movement AND velocity is tiny (physics pushing back)
+      const isStuck = horizontalMove < 0.01 && verticalMove < 0.01 && Math.abs(this.body.velocity.y) < 0.5;
+      
+      if (isStuck) {
         this.stuckTimer += delta;
         
-        // If stuck for too long, apply downward force to dislodge
-        if (this.stuckTimer > this.STUCK_THRESHOLD) {
-          // Apply strong downward velocity to break free
-          this.body.velocity.y = Math.min(this.body.velocity.y, -2.0);
-          // Also apply small random horizontal push to help slide off
-          const pushDir = Math.random() * Math.PI * 2;
-          this.body.velocity.x += Math.cos(pushDir) * 0.5;
-          this.body.velocity.z += Math.sin(pushDir) * 0.5;
-          this.stuckTimer = 0; // Reset timer
+        // After being stuck for a short time, forcefully teleport down
+        if (this.stuckTimer > 0.15) { // 150ms - quick response
+          // TELEPORT the position down - this bypasses physics constraints
+          this.body.position.y -= 0.1;
+          // Also give strong downward velocity
+          this.body.velocity.y = -3.0;
+          // Push away from where we're stuck (use last movement direction or random)
+          const pushAngle = Math.atan2(this.body.velocity.x, this.body.velocity.z) + Math.PI; // Push backward
+          this.body.velocity.x = Math.sin(pushAngle) * 2.0;
+          this.body.velocity.z = Math.cos(pushAngle) * 2.0;
+          this.stuckTimer = 0;
         }
       } else {
-        this.stuckTimer = 0; // Reset if moving normally
+        this.stuckTimer = 0;
       }
     } else {
-      this.stuckTimer = 0; // Reset when grounded
+      this.stuckTimer = 0;
     }
     
     // Update last position for next frame's stuck check
@@ -216,9 +338,16 @@ export class Player extends Character {
     if (this.isAgainstWall && !grounded) {
       canJumpNow = false;
       this.coyoteTimer = 0; // Also reset coyote timer to prevent delayed wall jumps
-      
-      // Force downward if we have any upward velocity while against wall
-      if (this.body.velocity.y > 0 && this.body.velocity.y < 5.0) {
+
+      // Only cancel *small* upward velocity when we're NOT in a legitimate jump.
+      // (Previously this canceled MIN_JUMP_FORCE=4 and caused tiny/no jumps near walls.)
+      if (!this.isJumping && this.body.velocity.y > 0 && this.body.velocity.y < 2.5) {
+        if (this.DEBUG_JUMP) {
+          console.log(
+            `[WALL] cancelUp vel.y=${this.body.velocity.y.toFixed(2)} pos.y=${this.body.position.y.toFixed(2)} ` +
+              `n=(${this.wallContactNormal.x.toFixed(2)},${this.wallContactNormal.y.toFixed(2)},${this.wallContactNormal.z.toFixed(2)})`
+          );
+        }
         this.body.velocity.y = 0;
       }
     }
@@ -318,6 +447,23 @@ export class Player extends Character {
     }
 
     // --- Jumping (with Coyote Jump support) ---
+    // SAFETY: If on ground and not moving up, force reset isJumping
+    // This prevents isJumping from getting stuck
+    if (grounded && this.body.velocity.y <= 0.5) {
+      this.isJumping = false;
+      this.jumpTime = 0;
+    }
+
+    // Debug: log every jump input frame
+    if (this.DEBUG_JUMP && input.jump) {
+      console.log(
+        `[JUMP] canJumpNow=${canJumpNow}, isJumping=${this.isJumping}, grounded=${grounded}, canJump=${groundInfo.canJump}, ` +
+          `againstWall=${this.isAgainstWall}, coyote=${this.coyoteTimer.toFixed(2)}, jumpTime=${this.jumpTime.toFixed(2)}, ` +
+          `vel.y=${this.body.velocity.y.toFixed(2)}, pos.y=${this.body.position.y.toFixed(2)}, footY=${this.getFootWorldY().toFixed(2)}, ` +
+          `slope=${groundInfo.slopeAngle.toFixed(2)}`
+      );
+    }
+    
     if (input.jump) {
       const startedJump = canJumpNow && !this.isJumping;
       if (startedJump) {
@@ -339,12 +485,6 @@ export class Player extends Character {
       }
     } else {
       this.isJumping = false;
-    }
-
-    // Reset jump state when landing to prevent edge-stuck issues
-    if (grounded && this.body.velocity.y <= 0.1) {
-      this.isJumping = false;
-      this.jumpTime = 0;
     }
 
     // Animation state for airborne
@@ -374,8 +514,9 @@ export class Player extends Character {
   private readonly MAX_JUMPABLE_SLOPE_ANGLE: number = 0.87;
 
   // Debug mode - set to true to enable console logging
-  private DEBUG_GROUND_CHECK: boolean = false;
+  private DEBUG_GROUND_CHECK: boolean = true;
   private debugLogTimer: number = 0;
+  private DEBUG_JUMP: boolean = true;
 
   /**
    * Check ground type and get ice slope info if standing on ice
@@ -385,26 +526,79 @@ export class Player extends Character {
     if (!this.body.world) return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle: 0 };
 
     // If moving upward significantly, not grounded (prevents edge-climbing glitch)
-    if (this.body.velocity.y > 1.5) {
+    if (this.body.velocity.y > 2.0) {
       return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle: 0 };
     }
 
-    const radius = 0.4; // Character radius
-    const rayLength = 0.35; // Shorter ray to avoid detecting platforms we're next to
-    const rayStartOffset = 0.05; // Start very close to bottom
+    // Ray should probe close to the *feet*; using body.position.y here is wrong for compound bodies.
+    const footY = this.getFootWorldY();
+    // Long ray (so we can still "see" ground reliably), but strict acceptance threshold below.
+    const rayUpFromFeet = 0.25;
+    const rayDownFromFeet = 1.2;
 
-    // Only cast center ray - simpler and more reliable
-    // Side rays were causing false positives when stuck on edges
-    const start = new CANNON.Vec3(
-      this.body.position.x,
-      this.body.position.y + rayStartOffset,
-      this.body.position.z
-    );
-    const end = new CANNON.Vec3(
-      this.body.position.x,
-      this.body.position.y - rayLength,
-      this.body.position.z
-    );
+    // ---------- CONTACT-BASED CHECK (more reliable than raycast) ----------
+    let contactGrounded = false;
+    let contactSlopeAngle = 0;
+    let contactUserData: any = null;
+
+    for (const c of this.body.world.contacts) {
+      // Contact normals point from bi to bj. Determine direction relative to this body.
+      const normal = new CANNON.Vec3();
+      let other: CANNON.Body | null = null;
+      if (c.bi === this.body) {
+        normal.copy(c.ni); // normal points from bi to bj
+        other = c.bj as CANNON.Body;
+      } else if (c.bj === this.body) {
+        // flip normal
+        c.ni.scale(-1, normal);
+        other = c.bi as CANNON.Body;
+      } else {
+        continue;
+      }
+
+      // Require upward-facing normal
+      const nY = normal.y;
+      if (nY < 0.6) continue; // roughly <=53 degrees slope is allowed
+
+      // Require contact point near feet: use contact point world positions
+      const contactPoint = new CANNON.Vec3();
+      if (c.bi === this.body) {
+        // contact point on bi: bi.position + ri
+        c.ri.vadd(this.body.position, contactPoint);
+      } else {
+        // contact point on bj: bj.position + rj
+        c.rj.vadd(other.position, contactPoint);
+      }
+      const distanceToFeet = footY - contactPoint.y;
+      if (distanceToFeet > 1.0 || distanceToFeet < -0.3) continue;
+
+      // Consider grounded
+      contactGrounded = true;
+      contactSlopeAngle = Math.acos(Math.min(1, Math.max(0, nY)));
+      contactUserData = other ? (other as any).userData : null;
+      break;
+    }
+
+    if (contactGrounded) {
+      const canJumpContact = contactSlopeAngle < this.MAX_JUMPABLE_SLOPE_ANGLE;
+      const tag = contactUserData?.tag;
+      const isIce = tag === "ice" || tag === "ice_slope";
+      const isIceSlope = tag === "ice_slope";
+
+      return {
+        grounded: true,
+        isIce,
+        isIceSlope,
+        canJump: canJumpContact,
+        slopeAngle: contactSlopeAngle,
+        slideDirection: isIceSlope ? contactUserData.slideDirection : undefined,
+        tiltAngle: isIceSlope ? contactUserData.tiltAngle : undefined,
+      };
+    }
+
+    // Cast center ray
+    const start = new CANNON.Vec3(this.body.position.x, footY + rayUpFromFeet, this.body.position.z);
+    const end = new CANNON.Vec3(this.body.position.x, footY - rayDownFromFeet, this.body.position.z);
 
     const result = new CANNON.RaycastResult();
     this.body.world.raycastClosest(
@@ -418,26 +612,38 @@ export class Player extends Character {
     );
 
     if (!result.hasHit || !result.body || result.body === this.body) {
+      if (this.DEBUG_GROUND_CHECK) {
+        this.debugLogTimer += 1 / 60;
+        if (this.debugLogTimer > 0.2) {
+          this.debugLogTimer = 0;
+          console.log(
+            `[GROUND] no-hit pos.y=${this.body.position.y.toFixed(2)} footY=${footY.toFixed(2)} vel.y=${this.body.velocity.y.toFixed(2)}`
+          );
+        }
+      }
       return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle: 0 };
     }
 
-    // CRITICAL: Check that the hit point is actually below us, not to the side
-    // The hit point's Y should be close to or below our feet position
+    // Check that the hit point is actually below us
     const hitY = result.hitPointWorld ? result.hitPointWorld.y : 0;
-    const feetY = this.body.position.y;
+    const feetY = footY;
     
-    // DEBUG: Log ground check info
-    if (this.DEBUG_GROUND_CHECK) {
-      this.debugLogTimer += 1/60;
-      if (this.debugLogTimer > 0.2) { // Log every 200ms
-        this.debugLogTimer = 0;
-        const normalY = result.hitNormalWorld ? result.hitNormalWorld.y : 0;
-        console.log(`[GroundCheck] pos.y=${feetY.toFixed(2)}, hitY=${hitY.toFixed(2)}, normalY=${normalY.toFixed(2)}, vel.y=${this.body.velocity.y.toFixed(2)}, isJumping=${this.isJumping}, coyote=${this.coyoteTimer.toFixed(2)}`);
+    // Calculate distance from feet to hit point
+    const distanceToGround = feetY - hitY;
+    
+    // Only grounded if ground is close enough to feet.
+    // Using a tight band here prevents "ground far below" false-positives on edges.
+    // Accept a small "snap" distance above ground; larger means we're airborne.
+    if (distanceToGround > 0.16 || distanceToGround < -0.12) {
+      if (this.DEBUG_GROUND_CHECK) {
+        this.debugLogTimer += 1 / 60;
+        if (this.debugLogTimer > 0.2) {
+          this.debugLogTimer = 0;
+          console.log(
+            `[GROUND] out-of-range pos.y=${this.body.position.y.toFixed(2)} footY=${feetY.toFixed(2)} hitY=${hitY.toFixed(2)} dist=${distanceToGround.toFixed(2)} vel.y=${this.body.velocity.y.toFixed(2)}`
+          );
+        }
       }
-    }
-    
-    // If hit point is above our feet position, we're hitting a wall/edge, not ground
-    if (hitY > feetY + 0.1) {
       return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle: 0 };
     }
 
@@ -448,6 +654,15 @@ export class Player extends Character {
     // Check if the hit normal is mostly upward (standing on surface, not wall)
     // normalY < 0.7 corresponds to slope > ~45 degrees - be stricter
     if (normalY < 0.7) {
+      if (this.DEBUG_GROUND_CHECK) {
+        this.debugLogTimer += 1 / 60;
+        if (this.debugLogTimer > 0.2) {
+          this.debugLogTimer = 0;
+          console.log(
+            `[GROUND] steep normalY=${normalY.toFixed(2)} slope=${slopeAngle.toFixed(2)} pos.y=${feetY.toFixed(2)} hitY=${hitY.toFixed(2)}`
+          );
+        }
+      }
       return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle };
     }
 

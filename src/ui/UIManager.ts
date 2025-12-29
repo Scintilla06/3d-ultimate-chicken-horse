@@ -291,6 +291,9 @@ export class UIManager {
   ): void {
     this.uiLayer.innerHTML = "";
 
+    // Keep signature in sync with Game.ts; currently lobby UI doesn't expose nickname editing.
+    void onNicknameChange;
+
     if (!this.scene || !this.camera || !this.uiRoot3D || !this.resources) {
       const fallback = document.createElement("div");
       fallback.className = "ui-fallback";

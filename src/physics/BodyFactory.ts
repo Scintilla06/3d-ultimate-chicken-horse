@@ -43,10 +43,13 @@ export class BodyFactory {
         // Use a cylinder for the main body - flat sides prevent edge-climbing
         const cylinderHeight = height - radius; // Leave room for bottom sphere
         const cylinderShape = new CANNON.Cylinder(radius, radius, cylinderHeight, 12);
-        
-        // Rotate cylinder to be upright (CANNON cylinders are along Y by default, but we need to check)
+
+        // cannon-es Cylinder is not guaranteed to be aligned with Y; rotate to ensure it's upright.
+        const cylinderOrientation = new CANNON.Quaternion();
+        cylinderOrientation.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+
         const cylinderOffset = new CANNON.Vec3(0, radius + cylinderHeight / 2, 0);
-        body.addShape(cylinderShape, cylinderOffset);
+        body.addShape(cylinderShape, cylinderOffset, cylinderOrientation);
 
         // Bottom sphere for smooth ground contact
         const bottomSphere = new CANNON.Sphere(radius * 0.9); // Slightly smaller to not poke out sides
