@@ -294,7 +294,20 @@ export class VolcanoIslandMap implements MapBuilder {
       const body = BodyFactory.createBox(2, 0.6, 2, 0, new CANNON.Vec3(x, y, z));
       // 设置为 Kinematic 类型，这样手动移动时玩家能正确站立和跳跃
       body.type = CANNON.Body.KINEMATIC;
-      (body as any).userData = { tag: "ground" };
+      body.updateMassProperties();
+      const orbitHalfWidthXZ = Math.sqrt(1 * 1 + 1 * 1); // half-diagonal for a 2x2 box in XZ
+      const orbitHalfHeightY = 0.6 / 2;
+      (body as any).userData = {
+        tag: "ground",
+        noBuildOrbit: {
+          centerX,
+          centerZ,
+          radius,
+          y,
+          halfWidthXZ: orbitHalfWidthXZ,
+          halfHeightY: orbitHalfHeightY,
+        },
+      };
       physicsWorld.world.addBody(body);
       
       const disc = this.createFloatingDisc(2);

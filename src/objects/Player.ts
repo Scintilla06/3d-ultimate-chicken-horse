@@ -4,6 +4,27 @@ import { Character } from "./character/Character";
 import { CharacterAnimState } from "./character/CharacterAppearance";
 import { CharacterRig } from "./character/CharacterRig";
 
+type GroundInfo = {
+  grounded: boolean;
+  isIce: boolean;
+  isIceSlope: boolean;
+  canJump: boolean;
+  slopeAngle: number;
+  groundBody?: CANNON.Body;
+  groundVelocity?: { x: number; z: number };
+  slideDirection?: { x: number; z: number };
+  tiltAngle?: number;
+};
+
+type SurfaceProbe = {
+  tag: string | null;
+  distance: number;
+  isIce: boolean;
+  isIceSlope: boolean;
+  slideDirection?: { x: number; z: number };
+  tiltAngle?: number;
+};
+
 export class Player extends Character {
   private isJumping: boolean = false;
   private jumpTime: number = 0;
@@ -17,6 +38,17 @@ export class Player extends Character {
   private readonly COYOTE_TIME: number = 0.12; // 120ms grace period
   private coyoteTimer: number = 0;
   private wasGrounded: boolean = false;
+
+  // Ice movement robustness: tolerate short grounded/tag flicker without breaking ice behavior
+  private readonly MOVE_GROUNDED_GRACE: number = 0.12;
+  private timeSinceLastGrounded: number = 999;
+  private lastGroundInfo: GroundInfo = {
+    grounded: false,
+    isIce: false,
+    isIceSlope: false,
+    canJump: false,
+    slopeAngle: 0,
+  };
 
   // Stuck detection: track position to detect when character is stuck on edges
   private lastPosition: CANNON.Vec3 = new CANNON.Vec3();
@@ -272,6 +304,63 @@ export class Player extends Character {
     const groundInfo = this.getGroundInfo();
     const grounded = groundInfo.grounded;
 
+    // Foot-probe: independent from grounded. Used to stabilize ice behavior and add diagnostics.
+    const surfaceProbe = this.probeSurfaceBelow(2.0);
+    const probeIsIce = !!surfaceProbe?.isIce;
+    const probeIsIceSlope = !!surfaceProbe?.isIceSlope;
+    const probeIsClose =
+      surfaceProbe != null && surfaceProbe.distance <= 0.55 && surfaceProbe.distance >= -0.12;
+
+    // Track last grounded info for a short grace window (used only to keep ice behavior stable).
+    this.timeSinceLastGrounded += delta;
+    if (grounded) {
+      this.timeSinceLastGrounded = 0;
+      this.lastGroundInfo = groundInfo;
+    }
+
+    const withinGrace = this.timeSinceLastGrounded < this.MOVE_GROUNDED_GRACE;
+
+    const moveIsIce =
+      groundInfo.isIce ||
+      (probeIsIce && probeIsClose) ||
+      (!grounded && withinGrace && this.lastGroundInfo.isIce);
+    const moveIsIceSlope =
+      groundInfo.isIceSlope ||
+      (probeIsIceSlope && probeIsClose) ||
+      (!grounded && withinGrace && this.lastGroundInfo.isIceSlope);
+    const moveSlideDirection =
+      groundInfo.slideDirection ?? surfaceProbe?.slideDirection ?? this.lastGroundInfo.slideDirection;
+    const moveTiltAngle =
+      groundInfo.tiltAngle ?? surfaceProbe?.tiltAngle ?? this.lastGroundInfo.tiltAngle;
+
+    // Only treat us as "move-grounded" on ice when we're not moving upward.
+    // This avoids accidentally running ground/ice movement logic during the early jump ascent.
+    const iceGraceVyOk = this.body.velocity.y <= 0.75;
+    const iceGraceActive = !grounded && moveIsIce && iceGraceVyOk && (withinGrace || probeIsClose);
+    const moveGrounded = grounded || iceGraceActive;
+
+    if (this.DEBUG_ICE) {
+      this.iceDebugTimer += delta;
+      const shouldLog =
+        this.iceDebugTimer > 0.25 &&
+        probeIsClose &&
+        (probeIsIce || probeIsIceSlope) &&
+        (!grounded || !groundInfo.isIce || !moveGrounded);
+
+      if (shouldLog) {
+        this.iceDebugTimer = 0;
+        const planarSpeed = Math.hypot(this.body.velocity.x, this.body.velocity.z);
+        console.log(
+          `[ICEBUG] tag=${surfaceProbe?.tag ?? "none"} dist=${surfaceProbe?.distance.toFixed(2) ?? "NA"} ` +
+            `grounded=${grounded} moveGrounded=${moveGrounded} iceGrace=${iceGraceActive} ` +
+            `groundIsIce=${groundInfo.isIce} moveIsIce=${moveIsIce} ` +
+            `vel=(${this.body.velocity.x.toFixed(2)},${this.body.velocity.y.toFixed(2)},${this.body.velocity.z.toFixed(2)}) ` +
+            `planar=${planarSpeed.toFixed(2)} pos.y=${this.body.position.y.toFixed(2)} footY=${this.getFootWorldY().toFixed(2)} ` +
+            `sinceGrounded=${this.timeSinceLastGrounded.toFixed(2)}`
+        );
+      }
+    }
+
     // Recompute wall contact per-frame (collide event is not reliable as a persistent state)
     const wallContact = this.computeWallContactFromContacts();
     this.isAgainstWall = wallContact.againstWall;
@@ -282,7 +371,7 @@ export class Player extends Character {
     // --- Stuck Detection and Recovery ---
     // Detect when character is stuck on an edge (physics engine pushing against penetration)
     // Symptoms: not grounded, barely moving, velocity near zero
-    if (!grounded) {
+    if (!moveGrounded) {
       const posDiff = this.body.position.vsub(this.lastPosition);
       const horizontalMove = Math.sqrt(posDiff.x * posDiff.x + posDiff.z * posDiff.z);
       const verticalMove = Math.abs(posDiff.y);
@@ -355,14 +444,25 @@ export class Player extends Character {
     // --- Movement ---
     const hasMovementInput = Math.abs(input.x) > 0.1 || Math.abs(input.y) > 0.1;
 
+    // Moving platforms: when grounded on a kinematic body, inherit its horizontal velocity.
+    // This prevents the player from being slowly carried off / feeling "slow" on rotating platforms.
+    const baseVX =
+      moveGrounded && grounded && groundInfo.groundBody?.type === CANNON.Body.KINEMATIC
+        ? groundInfo.groundBody.velocity.x
+        : 0;
+    const baseVZ =
+      moveGrounded && grounded && groundInfo.groundBody?.type === CANNON.Body.KINEMATIC
+        ? groundInfo.groundBody.velocity.z
+        : 0;
+
     // Ice slope: Always apply gentle downhill acceleration when on ice slope
-    if (grounded && groundInfo.isIceSlope && groundInfo.slideDirection && groundInfo.tiltAngle) {
-      const slideAccel = 0.5 * groundInfo.tiltAngle; // Gentle constant acceleration
-      this.body.velocity.x += groundInfo.slideDirection.x * slideAccel;
-      this.body.velocity.z += groundInfo.slideDirection.z * slideAccel;
+    if (moveGrounded && moveIsIceSlope && moveSlideDirection && moveTiltAngle) {
+      const slideAccel = 0.5 * moveTiltAngle; // Gentle constant acceleration
+      this.body.velocity.x += moveSlideDirection.x * slideAccel;
+      this.body.velocity.z += moveSlideDirection.z * slideAccel;
     }
 
-    if (grounded) {
+    if (moveGrounded) {
       const speed = input.sprint
         ? this.MOVE_SPEED * this.SPRINT_MULTIPLIER
         : this.MOVE_SPEED;
@@ -374,26 +474,28 @@ export class Player extends Character {
         const vx = Math.sin(targetRotation) * speed;
         const vz = Math.cos(targetRotation) * speed;
 
-        if (groundInfo.isIce) {
+        if (moveIsIce) {
           // Ice: Smooth acceleration/deceleration (slippery)
           const iceLerp = 0.08; // Lower = more slippery
-          this.body.velocity.x += (vx - this.body.velocity.x) * iceLerp;
-          this.body.velocity.z += (vz - this.body.velocity.z) * iceLerp;
+          this.body.velocity.x += (baseVX + vx - this.body.velocity.x) * iceLerp;
+          this.body.velocity.z += (baseVZ + vz - this.body.velocity.z) * iceLerp;
         } else {
           // Normal movement (instant)
-          this.body.velocity.x = vx;
-          this.body.velocity.z = vz;
+          this.body.velocity.x = baseVX + vx;
+          this.body.velocity.z = baseVZ + vz;
         }
         this.body.quaternion.setFromEuler(0, targetRotation, 0);
 
         this.animState = "run";
       } else {
         // No movement input
-        if (groundInfo.isIce) {
+        if (moveIsIce) {
           // Ice: Apply friction slowly (slide)
           const iceDeceleration = 0.98; // Close to 1 = very slippery
-          this.body.velocity.x *= iceDeceleration;
-          this.body.velocity.z *= iceDeceleration;
+          const relX = this.body.velocity.x - baseVX;
+          const relZ = this.body.velocity.z - baseVZ;
+          this.body.velocity.x = baseVX + relX * iceDeceleration;
+          this.body.velocity.z = baseVZ + relZ * iceDeceleration;
           
           // Only go to idle if nearly stopped
           if (Math.abs(this.body.velocity.x) < 0.3 && Math.abs(this.body.velocity.z) < 0.3) {
@@ -405,8 +507,8 @@ export class Player extends Character {
           // Normal ground: Stop immediately (but preserve velocity if about to jump)
           const aboutToJump = input.jump && canJumpNow && !this.isJumping;
           if (!aboutToJump) {
-            this.body.velocity.x = 0;
-            this.body.velocity.z = 0;
+            this.body.velocity.x = baseVX;
+            this.body.velocity.z = baseVZ;
           }
           this.animState = "idle";
         }
@@ -489,7 +591,7 @@ export class Player extends Character {
 
     // Animation state for airborne
     // Use smoothed velocity check and additional conditions to prevent edge jittering
-    if (!grounded) {
+    if (!grounded && !moveGrounded) {
       // Only show jump animation if:
       // 1. Actually jumping (isJumping flag) AND moving upward significantly
       const isActuallyJumping = this.isJumping && this.body.velocity.y > 1.0;
@@ -517,12 +619,14 @@ export class Player extends Character {
   private DEBUG_GROUND_CHECK: boolean = true;
   private debugLogTimer: number = 0;
   private DEBUG_JUMP: boolean = true;
+  private DEBUG_ICE: boolean = true;
+  private iceDebugTimer: number = 0;
 
   /**
    * Check ground type and get ice slope info if standing on ice
    * Uses multiple ray casts for more reliable edge detection
    */
-  private getGroundInfo(): { grounded: boolean; isIce: boolean; isIceSlope: boolean; canJump: boolean; slopeAngle: number; slideDirection?: { x: number; z: number }; tiltAngle?: number } {
+  private getGroundInfo(): GroundInfo {
     if (!this.body.world) return { grounded: false, isIce: false, isIceSlope: false, canJump: false, slopeAngle: 0 };
 
     // If moving upward significantly, not grounded (prevents edge-climbing glitch)
@@ -540,6 +644,7 @@ export class Player extends Character {
     let contactGrounded = false;
     let contactSlopeAngle = 0;
     let contactUserData: any = null;
+    let contactBody: CANNON.Body | null = null;
 
     for (const c of this.body.world.contacts) {
       // Contact normals point from bi to bj. Determine direction relative to this body.
@@ -576,6 +681,7 @@ export class Player extends Character {
       contactGrounded = true;
       contactSlopeAngle = Math.acos(Math.min(1, Math.max(0, nY)));
       contactUserData = other ? (other as any).userData : null;
+      contactBody = other;
       break;
     }
 
@@ -585,12 +691,18 @@ export class Player extends Character {
       const isIce = tag === "ice" || tag === "ice_slope";
       const isIceSlope = tag === "ice_slope";
 
+      const groundVelocity = contactBody
+        ? { x: contactBody.velocity.x, z: contactBody.velocity.z }
+        : undefined;
+
       return {
         grounded: true,
         isIce,
         isIceSlope,
         canJump: canJumpContact,
         slopeAngle: contactSlopeAngle,
+        groundBody: contactBody ?? undefined,
+        groundVelocity,
         slideDirection: isIceSlope ? contactUserData.slideDirection : undefined,
         tiltAngle: isIceSlope ? contactUserData.tiltAngle : undefined,
       };
@@ -671,7 +783,15 @@ export class Player extends Character {
 
     const userData = (result.body as any).userData;
     if (!userData) {
-      return { grounded: true, isIce: false, isIceSlope: false, canJump, slopeAngle };
+      return {
+        grounded: true,
+        isIce: false,
+        isIceSlope: false,
+        canJump,
+        slopeAngle,
+        groundBody: result.body,
+        groundVelocity: { x: result.body.velocity.x, z: result.body.velocity.z },
+      };
     }
 
     const tag = userData.tag;
@@ -684,8 +804,47 @@ export class Player extends Character {
       isIceSlope,
       canJump,
       slopeAngle,
+      groundBody: result.body,
+      groundVelocity: { x: result.body.velocity.x, z: result.body.velocity.z },
       slideDirection: isIceSlope ? userData.slideDirection : undefined,
       tiltAngle: isIceSlope ? userData.tiltAngle : undefined
+    };
+  }
+
+  private probeSurfaceBelow(maxDown: number): SurfaceProbe | null {
+    if (!this.body.world) return null;
+
+    const footY = this.getFootWorldY();
+    const start = new CANNON.Vec3(this.body.position.x, footY + 0.25, this.body.position.z);
+    const end = new CANNON.Vec3(this.body.position.x, footY - maxDown, this.body.position.z);
+
+    const result = new CANNON.RaycastResult();
+    this.body.world.raycastClosest(
+      start,
+      end,
+      {
+        collisionFilterMask: -1,
+        skipBackfaces: true,
+      },
+      result
+    );
+
+    if (!result.hasHit || !result.body || result.body === this.body) return null;
+
+    const hitY = result.hitPointWorld ? result.hitPointWorld.y : 0;
+    const distance = footY - hitY;
+    const userData = (result.body as any).userData;
+    const tag = userData?.tag ?? null;
+    const isIce = tag === "ice" || tag === "ice_slope";
+    const isIceSlope = tag === "ice_slope";
+
+    return {
+      tag,
+      distance,
+      isIce,
+      isIceSlope,
+      slideDirection: isIceSlope ? userData?.slideDirection : undefined,
+      tiltAngle: isIceSlope ? userData?.tiltAngle : undefined,
     };
   }
 

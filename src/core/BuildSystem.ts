@@ -368,6 +368,29 @@ export class BuildSystem {
       ),
     });
 
+    // 0. 轨道禁放（火山旋转平台）：整条环形运动轨迹上禁止放置，避免之后与运动平台重叠。
+    // 通过扫描场景中带有 userData.noBuildOrbit 的刚体获取轨道参数（只在火山地图的旋转平台上会存在）。
+    const itemRadiusXZ = Math.sqrt(halfExtents.x * halfExtents.x + halfExtents.z * halfExtents.z);
+    const extraMargin = 0.15;
+    for (const b of this.physicsWorld.world.bodies) {
+      const ud = (b as any).userData;
+      const orbit = ud?.noBuildOrbit;
+      if (!orbit) continue;
+
+      const dx = position.x - orbit.centerX;
+      const dz = position.z - orbit.centerZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      // Height overlap test first (cheap and avoids blocking unrelated heights)
+      const dy = Math.abs(position.y - orbit.y);
+      const heightOverlap = dy <= orbit.halfHeightY + halfExtents.y + extraMargin;
+      if (!heightOverlap) continue;
+
+      const radialDelta = Math.abs(dist - orbit.radius);
+      const withinRing = radialDelta <= orbit.halfWidthXZ + itemRadiusXZ + extraMargin;
+      if (withinRing) return false;
+    }
+
     let overlap = false;
     this.physicsWorld.world.bodies.forEach((b) => {
       if (placeAABB.overlaps(b.aabb)) {
