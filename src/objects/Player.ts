@@ -64,6 +64,11 @@ export class Player extends Character {
   public hasWon: boolean = false;
   public score: number = 0;
 
+  // 大炮发射状态
+  private isLaunched: boolean = false;
+  private launchTimer: number = 0;
+  private readonly LAUNCH_CONTROL_LOCK_TIME: number = 0.5; // 发射后锁定控制的时间
+
   protected animState: CharacterAnimState = "idle";
 
   // Wall collision tracking - to prevent wall climbing
@@ -162,8 +167,35 @@ export class Player extends Character {
     //   console.log(`[DEBUG] grounded=${groundInfo.grounded}, isAgainstWall=${this.isAgainstWall}, vel.y=${this.body.velocity.y.toFixed(2)}, pos.y=${this.body.position.y.toFixed(2)}`);
     // }
     
+    // 更新发射状态计时器
+    if (this.isLaunched) {
+      this.launchTimer += delta;
+      if (this.launchTimer > this.LAUNCH_CONTROL_LOCK_TIME) {
+        this.isLaunched = false;
+        this.launchTimer = 0;
+      }
+    }
+    
     super.setAnimState(this.animState);
     super.update(delta);
+  }
+
+  /**
+   * 设置被大炮发射状态
+   */
+  public setLaunched(launched: boolean): void {
+    this.isLaunched = launched;
+    if (launched) {
+      this.launchTimer = 0;
+      this.isJumping = true; // 设置跳跃状态以启用空中动画
+    }
+  }
+
+  /**
+   * 检查是否处于发射状态
+   */
+  public isInLaunchedState(): boolean {
+    return this.isLaunched;
   }
 
   private getWallContact(direction: THREE.Vector3): CANNON.Vec3 | null {
@@ -301,6 +333,13 @@ export class Player extends Character {
     delta: number = 1 / 60
   ) {
     if (this.isDead || this.hasWon) return;
+    
+    // 如果处于发射状态，不处理移动输入（让玩家自由飞行）
+    if (this.isLaunched) {
+      // 仍然更新动画状态
+      this.animState = "jump";
+      return;
+    }
 
     const groundInfo = this.getGroundInfo();
     const grounded = groundInfo.grounded;
@@ -466,6 +505,20 @@ export class Player extends Character {
         ? groundInfo.groundBody.velocity.z
         : 0;
 
+    // DEBUG: Log movement state when on ice or moving fast
+    if (this.DEBUG_ICE) {
+      const speed = Math.hypot(this.body.velocity.x, this.body.velocity.z);
+      if (moveIsIce || speed > 5.0) {
+        this.iceDebugTimer += delta;
+        if (this.iceDebugTimer > 0.1) { // Log every 100ms
+          this.iceDebugTimer = 0;
+          console.log(`[MOVE_DEBUG] grounded=${grounded} moveGrounded=${moveGrounded} isIce=${moveIsIce} ` +
+            `speed=${speed.toFixed(2)} vel=(${this.body.velocity.x.toFixed(2)}, ${this.body.velocity.y.toFixed(2)}, ${this.body.velocity.z.toFixed(2)}) ` +
+            `baseV=(${baseVX.toFixed(2)}, ${baseVZ.toFixed(2)}) input=(${input.x.toFixed(2)}, ${input.y.toFixed(2)})`);
+        }
+      }
+    }
+
     // Ice slope: Always apply gentle downhill acceleration when on ice slope
     if (moveGrounded && moveIsIceSlope && moveSlideDirection && moveTiltAngle) {
       const slideAccel = 0.5 * moveTiltAngle; // Gentle constant acceleration
@@ -487,9 +540,32 @@ export class Player extends Character {
 
         if (moveIsIce) {
           // Ice: Smooth acceleration/deceleration (slippery)
+          // Instead of simple lerp, we clamp the change to simulate limited grip (max acceleration/deceleration)
           const iceLerp = 0.08; // Lower = more slippery
-          this.body.velocity.x += (baseVX + vx - this.body.velocity.x) * iceLerp;
-          this.body.velocity.z += (baseVZ + vz - this.body.velocity.z) * iceLerp;
+          
+          const targetVX = baseVX + vx;
+          const targetVZ = baseVZ + vz;
+          
+          const diffX = targetVX - this.body.velocity.x;
+          const diffZ = targetVZ - this.body.velocity.z;
+          
+          let changeX = diffX * iceLerp;
+          let changeZ = diffZ * iceLerp;
+          
+          // Limit the maximum velocity change per frame on ice to preserve momentum
+          // 0.5 per frame at 60fps = ~30 units/s^2 max acceleration/braking
+          // This allows normal control at low speeds but prevents instant stopping from high speeds
+          const maxChange = 0.5; 
+          const changeLen = Math.hypot(changeX, changeZ);
+          
+          if (changeLen > maxChange) {
+            const scale = maxChange / changeLen;
+            changeX *= scale;
+            changeZ *= scale;
+          }
+          
+          this.body.velocity.x += changeX;
+          this.body.velocity.z += changeZ;
         } else {
           // Normal movement (instant)
           this.body.velocity.x = baseVX + vx;
@@ -505,8 +581,24 @@ export class Player extends Character {
           const iceDeceleration = 0.98; // Close to 1 = very slippery
           const relX = this.body.velocity.x - baseVX;
           const relZ = this.body.velocity.z - baseVZ;
-          this.body.velocity.x = baseVX + relX * iceDeceleration;
-          this.body.velocity.z = baseVZ + relZ * iceDeceleration;
+          
+          let newRelX = relX * iceDeceleration;
+          let newRelZ = relZ * iceDeceleration;
+          
+          // Also clamp the deceleration amount to prevent rapid speed loss
+          const changeX = newRelX - relX;
+          const changeZ = newRelZ - relZ;
+          const maxDecel = 0.2; // Lower limit for friction deceleration
+          
+          const changeLen = Math.hypot(changeX, changeZ);
+          if (changeLen > maxDecel) {
+             const scale = maxDecel / changeLen;
+             newRelX = relX + changeX * scale;
+             newRelZ = relZ + changeZ * scale;
+          }
+
+          this.body.velocity.x = baseVX + newRelX;
+          this.body.velocity.z = baseVZ + newRelZ;
           
           // Only go to idle if nearly stopped
           if (Math.abs(this.body.velocity.x) < 0.3 && Math.abs(this.body.velocity.z) < 0.3) {
@@ -893,5 +985,7 @@ export class Player extends Character {
     this.animState = "idle";
     this.stuckTimer = 0; // Reset stuck detection
     this.lastPosition.copy(position);
+    this.isLaunched = false; // Reset launch state
+    this.launchTimer = 0;
   }
 }

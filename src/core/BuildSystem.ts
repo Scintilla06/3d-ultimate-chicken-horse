@@ -3,6 +3,9 @@ import * as CANNON from "cannon-es";
 import { Resources } from "../core/Resources";
 import { PhysicsWorld } from "../physics/PhysicsWorld";
 import { Crossbow } from "../objects/traps/Crossbow";
+import { BlackHole } from "../objects/traps/BlackHole";
+import { GoldCoin } from "../objects/traps/GoldCoin";
+import { Cannon } from "../objects/traps/Cannon";
 
 /**
  * 物品尺寸信息
@@ -42,6 +45,15 @@ export class BuildSystem {
 
   // 存储创建的十字弓引用（用于清理）
   private crossbows: Crossbow[] = [];
+  
+  // 存储创建的黑洞引用
+  private blackHoles: BlackHole[] = [];
+  
+  // 存储创建的金币引用
+  private goldCoins: GoldCoin[] = [];
+  
+  // 存储创建的大炮引用
+  private cannons: Cannon[] = [];
 
   constructor(
     scene: THREE.Scene,
@@ -101,6 +113,9 @@ export class BuildSystem {
   public getItemYShift(itemId: string): number {
     if (itemId === "spikes") {
       return -0.25;
+    }
+    if (itemId === "cannon") {
+      return 0.1;
     }
     return 0;
   }
@@ -400,7 +415,9 @@ export class BuildSystem {
     if (overlap) return false;
 
     // 2. 支撑检测
-    if (itemId === "wood_block_321" || itemId === "crossbow") return true;
+    // 这些物品可以悬空放置
+    if (itemId === "wood_block_321" || itemId === "crossbow" || 
+        itemId === "blackhole" || itemId === "gold" || itemId === "cannon") return true;
 
     if (itemId === "spikes") {
       const start = new CANNON.Vec3(position.x, position.y, position.z);
@@ -422,12 +439,13 @@ export class BuildSystem {
 
   /**
    * 放置物品
+   * 返回值类型扩展为支持多种工具
    */
   public placeObject(
     itemId: string,
     position: THREE.Vector3,
     rotationIndex: number = 0
-  ): Crossbow | null {
+  ): Crossbow | BlackHole | GoldCoin | Cannon | null {
     let mesh: THREE.Group | undefined;
     let body: CANNON.Body | undefined;
     let shape: CANNON.Shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
@@ -450,6 +468,18 @@ export class BuildSystem {
       mesh = this.resources.models.get("crossbow")?.clone();
       shape = new CANNON.Box(new CANNON.Vec3(1.0, 1.0, 1.0));
       tag = "block";
+    } else if (itemId === "blackhole") {
+      mesh = this.resources.models.get("blackhole")?.clone();
+      shape = new CANNON.Sphere(0.6); // 黑洞使用球形碰撞体
+      tag = "black_hole";
+    } else if (itemId === "gold") {
+      mesh = this.resources.models.get("gold")?.clone();
+      shape = new CANNON.Sphere(0.5); // 金币使用球形碰撞体
+      tag = "gold_coin";
+    } else if (itemId === "cannon") {
+      mesh = this.resources.models.get("cannon")?.clone();
+      shape = new CANNON.Box(new CANNON.Vec3(0.8, 0.8, 0.8));
+      tag = "cannon";
     }
 
     if (mesh) {
@@ -475,6 +505,9 @@ export class BuildSystem {
 
       if (itemId === "crossbow") {
         body.quaternion.set(q.x, q.y, q.z, q.w);
+      } else if (itemId === "cannon") {
+        // 大炮也需要应用旋转
+        body.quaternion.set(q.x, q.y, q.z, q.w);
       }
 
       let bodyY = mesh.position.y;
@@ -484,9 +517,7 @@ export class BuildSystem {
       console.log(
         `Placed ${itemId} at mesh.y=${mesh.position.y.toFixed(
           3
-        )}, body.y=${body.position.y.toFixed(3)}, halfHeight=${
-          (shape as CANNON.Box).halfExtents.y
-        }`
+        )}, body.y=${body.position.y.toFixed(3)}`
       );
 
       if (tag) (body as any).userData = { tag: tag, owner: "local" };
@@ -496,6 +527,7 @@ export class BuildSystem {
       this.scene.add(mesh);
       this.physicsWorld.world.addBody(body);
 
+      // 根据物品类型创建对应的工具实例
       if (itemId === "crossbow") {
         const arrowModel = this.resources.models.get("arrow");
         if (arrowModel) {
@@ -509,6 +541,24 @@ export class BuildSystem {
           this.crossbows.push(crossbow);
           return crossbow;
         }
+      } else if (itemId === "blackhole") {
+        const blackHole = new BlackHole(
+          mesh,
+          body,
+          this.physicsWorld.world,
+          "local"
+        );
+        this.blackHoles.push(blackHole);
+        return blackHole;
+      } else if (itemId === "gold") {
+        const goldCoin = new GoldCoin(mesh, body, "local");
+        this.goldCoins.push(goldCoin);
+        return goldCoin;
+      } else if (itemId === "cannon") {
+        const rotationY = (rotationIndex * Math.PI) / 2;
+        const cannon = new Cannon(mesh, body, rotationY, "local");
+        this.cannons.push(cannon);
+        return cannon;
       }
     }
 
@@ -646,5 +696,60 @@ export class BuildSystem {
   public clearCrossbows(): void {
     this.crossbows.forEach((c) => c.cleanup());
     this.crossbows = [];
+  }
+
+  /**
+   * 获取所有黑洞
+   */
+  public getBlackHoles(): BlackHole[] {
+    return this.blackHoles;
+  }
+
+  /**
+   * 清理所有黑洞
+   */
+  public clearBlackHoles(): void {
+    this.blackHoles.forEach((b) => b.cleanup());
+    this.blackHoles = [];
+  }
+
+  /**
+   * 获取所有金币
+   */
+  public getGoldCoins(): GoldCoin[] {
+    return this.goldCoins;
+  }
+
+  /**
+   * 清理所有金币
+   */
+  public clearGoldCoins(): void {
+    this.goldCoins.forEach((g) => g.cleanup());
+    this.goldCoins = [];
+  }
+
+  /**
+   * 获取所有大炮
+   */
+  public getCannons(): Cannon[] {
+    return this.cannons;
+  }
+
+  /**
+   * 清理所有大炮
+   */
+  public clearCannons(): void {
+    this.cannons.forEach((c) => c.cleanup());
+    this.cannons = [];
+  }
+
+  /**
+   * 清理所有工具
+   */
+  public clearAllTools(): void {
+    this.clearCrossbows();
+    this.clearBlackHoles();
+    this.clearGoldCoins();
+    this.clearCannons();
   }
 }

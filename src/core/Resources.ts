@@ -55,6 +55,24 @@ export class Resources {
         }
       );
 
+      // 新工具：黑洞
+      this.loadModel(
+        "blackhole",
+        import.meta.env.BASE_URL + "models/traps/blackhole.glb"
+      );
+
+      // 新工具：金币
+      this.loadModel(
+        "gold",
+        import.meta.env.BASE_URL + "models/traps/gold.glb"
+      );
+
+      // 新工具：大炮
+      this.loadModel(
+        "cannon",
+        import.meta.env.BASE_URL + "models/traps/cannon.glb"
+      );
+
       this.loadModel(
         "platform",
         import.meta.env.BASE_URL + "models/blocks/platform.glb"
@@ -85,10 +103,6 @@ export class Resources {
       this.loadModel(
         "horse",
         import.meta.env.BASE_URL + "models/characters/horse/horse.glb"
-      );
-      this.loadModel(
-        "raccoon",
-        import.meta.env.BASE_URL + "models/characters/raccoon/raccoon.glb"
       );
       this.loadModel(
         "sheep",

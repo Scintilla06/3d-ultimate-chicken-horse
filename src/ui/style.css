@@ -44,14 +44,14 @@
 @keyframes logo-pop-in {
     0% {
         opacity: 0;
-        transform: translateX(-50%) scale(0.3);
+        transform: scale(0.3);
     }
     50% {
         opacity: 1;
     }
     100% {
         opacity: 1;
-        transform: translateX(-50%) scale(1);
+        transform: scale(1);
     }
 }
 

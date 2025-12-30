@@ -399,13 +399,16 @@ export class Game {
           this.buildSystem.ghostObject.position
         )
       ) {
-        const crossbow = this.buildSystem.placeObject(
+        const placedObject = this.buildSystem.placeObject(
           this.buildSystem.selectedItem,
           this.buildSystem.ghostObject.position,
           this.buildSystem.rotation
         );
 
-        if (crossbow) this.attachCrossbowAudio(crossbow);
+        // 只有十字弓需要附加音频
+        if (placedObject && placedObject instanceof Crossbow) {
+          this.attachCrossbowAudio(placedObject);
+        }
 
         this.audio.playSfx(AudioIds.BuildPlace);
 
@@ -693,13 +696,16 @@ export class Game {
   private handleEventPlacePacket(packet: Packet, _senderId: string): void {
     if (packet.p.playerId === this.networkManager.getMyId()) return;
 
-    const crossbow = this.buildSystem.placeObject(
+    const placedObject = this.buildSystem.placeObject(
       packet.p.itemId,
       new THREE.Vector3(packet.p.pos.x, packet.p.pos.y, packet.p.pos.z),
       packet.p.rot || 0
     );
 
-    if (crossbow) this.attachCrossbowAudio(crossbow);
+    // 只有十字弓需要附加音频
+    if (placedObject && placedObject instanceof Crossbow) {
+      this.attachCrossbowAudio(placedObject);
+    }
 
     this.playersFinishedTurn.add(packet.p.playerId);
     this.checkAllPlayersFinished();
@@ -998,7 +1004,7 @@ export class Game {
     if (this.state === newState) return;
 
     this.state = newState;
-    this.uiManager.showMessage(`State: ${GameState[newState]}`);
+    // this.uiManager.showMessage(`State: ${GameState[newState]}`);
 
     switch (newState) {
       case GameState.TITLE:
@@ -1047,7 +1053,7 @@ export class Game {
     this.partyBoxManager.resetRoundCount();
     this.scoreManager.resetAll(this.lobbyPlayers);
     this.levelManager.clearPlacedObjects();
-    this.buildSystem.clearCrossbows();
+    this.buildSystem.clearAllTools(); // 清理所有工具（十字弓、黑洞、金币、大炮）
 
     this.localDeathSoundPlayed = false;
 
@@ -1255,6 +1261,84 @@ export class Game {
       crossbow.update(1 / 60);
     });
 
+    // 收集所有玩家的物理body（用于黑洞吸引）
+    const playerBodies: CANNON.Body[] = [];
+    this.players.forEach((player) => {
+      if (!player.isDead && !player.hasWon) {
+        playerBodies.push(player.body);
+      }
+    });
+
+    // 更新黑洞（旋转和吸引玩家）
+    this.buildSystem.getBlackHoles().forEach((blackHole) => {
+      blackHole.update(1 / 60, playerBodies);
+      
+      // 检查玩家是否被吸入黑洞
+      this.players.forEach((player, _playerId) => {
+        if (!player.isDead && !player.hasWon) {
+          if (blackHole.isPlayerInKillZone(player.body.position)) {
+            player.isDead = true;
+            player.lastHitBy = blackHole.owner;
+            player.onDeath?.({ tag: "black_hole", owner: blackHole.owner });
+          }
+        }
+      });
+    });
+
+    // 更新金币（旋转）
+    this.buildSystem.getGoldCoins().forEach((goldCoin) => {
+      goldCoin.update(1 / 60);
+      
+      // 检查玩家是否捡到金币
+      this.players.forEach((player, playerId) => {
+        if (!player.isDead && !player.hasWon && !goldCoin.isCollected) {
+          const actualPlayerId = playerId === "local" ? this.networkManager.getMyId() : playerId;
+          if (goldCoin.checkAndCollect(actualPlayerId, player.body.position)) {
+            // 记录金币收集者
+            this.scoreManager.recordGoldCollect(actualPlayerId);
+            this.audio.playSfx(AudioIds.Coin);
+          }
+        }
+      });
+    });
+
+    // 更新大炮（冷却）并检查玩家是否进入
+    this.buildSystem.getCannons().forEach((cannon) => {
+      cannon.update(1 / 60);
+      
+      // 设置发射回调
+      if (!cannon.onLaunch) {
+        cannon.onLaunch = (pid) => {
+           const p = this.players.get(pid === this.networkManager.getMyId() ? "local" : pid);
+           if (p) {
+             p.setLaunched(true);
+             p.rig.root.visible = true; // 恢复显示
+           }
+        };
+      }
+      
+      // 设置捕获回调
+      if (!cannon.onCapture) {
+        cannon.onCapture = (pid) => {
+           const p = this.players.get(pid === this.networkManager.getMyId() ? "local" : pid);
+           if (p) {
+             p.rig.root.visible = false; // 隐藏模型
+           }
+        };
+      }
+      
+      // 检查玩家是否进入大炮
+      this.players.forEach((player, playerId) => {
+        if (!player.isDead && !player.hasWon) {
+          const actualPlayerId = playerId === "local" ? this.networkManager.getMyId() : playerId;
+          if (cannon.checkAndLaunch(actualPlayerId, player.body)) {
+            // 玩家被大炮发射
+            player.setLaunched(true); // 设置发射状态，暂时禁用移动控制
+          }
+        }
+      });
+    });
+
     // 更新玩家
     this.players.forEach((player) => {
       player.update(1 / 60);
@@ -1385,8 +1469,25 @@ export class Game {
     if (this.state === GameState.RUN) {
       if (!this.playersFinishedTurn.has(this.networkManager.getMyId())) {
         if (localPlayer.checkDeath() || localPlayer.hasWon) {
-          this.playersFinishedTurn.add(this.networkManager.getMyId());
-          this.uiManager.showMessage(localPlayer.hasWon ? "GOAL!" : "DIED!");
+          if (localPlayer.hasWon) {
+            this.playersFinishedTurn.add(this.networkManager.getMyId());
+            this.uiManager.showMessage("GOAL!");
+          } else {
+            // 死亡逻辑
+            this.uiManager.showDeathScreen();
+            
+            // 延迟1秒后重生并进入观战
+            setTimeout(() => {
+              // 重生到出生点上方
+              localPlayer.body.position.set(0, 8, 0);
+              localPlayer.body.velocity.set(0, 0, 0);
+              localPlayer.isDead = false;
+              localPlayer.setAnimState("idle");
+              
+              // 进入观战模式
+              this.playersFinishedTurn.add(this.networkManager.getMyId());
+            }, 1000);
+          }
 
           // 掉落死亡不会触发 collide，补一声
           if (!localPlayer.hasWon && !this.localDeathSoundPlayed) {

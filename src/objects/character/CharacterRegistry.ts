@@ -17,13 +17,6 @@ const CHARACTER_DEFINITIONS: CharacterAppearance[] = [
     accentColor: 0xd2691e,
   },
   {
-    id: "raccoon",
-    modelKey: "raccoon",
-    baseColor: 0x808080,
-    beakColor: 0x000000,
-    accentColor: 0x404040,
-  },
-  {
     id: "sheep",
     modelKey: "sheep",
     baseColor: 0xffffff,

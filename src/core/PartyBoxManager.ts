@@ -17,8 +17,8 @@ export class PartyBoxManager {
   private resources: Resources;
   private partyBoxRoot: THREE.Group;
 
-  // 可用物品列表
-  private static readonly ALL_ITEMS = ["wood_block_321", "spikes", "crossbow"];
+  // 可用物品列表（添加新工具：黑洞、金币、大炮）
+  private static readonly ALL_ITEMS = ["wood_block_321", "spikes", "crossbow", "blackhole", "gold", "cannon"];
 
   // 当前物品
   private items: THREE.Group[] = [];

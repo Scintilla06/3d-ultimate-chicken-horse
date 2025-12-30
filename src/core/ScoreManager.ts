@@ -28,11 +28,13 @@ export class ScoreManager {
   public static readonly SOLO_POINTS = 10; // 独行得分
   public static readonly FIRST_POINTS = 5; // 第一得分
   public static readonly TRAP_KILL_POINTS = 5; // 陷阱得分
+  public static readonly GOLD_COIN_POINTS = 8; // 金币得分
   public static readonly GOAL_SCORE = 50; // 胜利所需总分
 
   // 回合追踪
   private finishOrder: string[] = [];
   private trapKills: Map<string, number> = new Map();
+  private goldCollectors: Set<string> = new Set(); // 收集了金币的玩家
 
   /**
    * 记录玩家到达终点
@@ -49,6 +51,20 @@ export class ScoreManager {
   public recordTrapKill(killerId: string): void {
     const currentKills = this.trapKills.get(killerId) || 0;
     this.trapKills.set(killerId, currentKills + 1);
+  }
+
+  /**
+   * 记录金币收集
+   */
+  public recordGoldCollect(playerId: string): void {
+    this.goldCollectors.add(playerId);
+  }
+
+  /**
+   * 检查玩家是否收集了金币
+   */
+  public hasCollectedGold(playerId: string): boolean {
+    return this.goldCollectors.has(playerId);
   }
 
   /**
@@ -136,6 +152,15 @@ export class ScoreManager {
           });
         }
 
+        // 5. 金币得分：收集了金币的玩家获得额外分数
+        if (this.goldCollectors.has(p.id)) {
+          scoreBreakdown.push({
+            type: "Gold",
+            points: ScoreManager.GOLD_COIN_POINTS,
+            color: "#FFD700", // 金色
+          });
+        }
+
         // 计算总新增分数
         const added = scoreBreakdown.reduce((sum, s) => sum + s.points, 0);
 
@@ -170,6 +195,7 @@ export class ScoreManager {
   public resetRound(): void {
     this.finishOrder = [];
     this.trapKills.clear();
+    this.goldCollectors.clear(); // 清除金币收集记录
   }
 
   /**

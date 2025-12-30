@@ -96,14 +96,91 @@ export class UIManager {
 
   // ========== 消息显示 ==========
 
-  public showMessage(message: string): void {
-    const msgDiv = document.createElement("div");
-    msgDiv.className = "ui-message";
-    msgDiv.innerText = message;
-    this.uiLayer.appendChild(msgDiv);
+  public showMessage(message: string, duration: number = 2000): void {
+    // 检查是否已经有相同的消息在显示（简单的防抖）
+    const existing = document.getElementById("ui-big-message");
+    if (existing) {
+      if (existing.innerText === message) return; // 内容相同，忽略
+      if (existing.parentNode) existing.parentNode.removeChild(existing); // 内容不同，移除旧的
+    }
+
+    const container = document.createElement("div");
+    container.id = "ui-big-message";
+    container.style.position = "absolute";
+    container.style.top = "0";
+    container.style.left = "0";
+    container.style.width = "100%";
+    container.style.height = "100%";
+    container.style.display = "flex";
+    container.style.alignItems = "center";
+    container.style.justifyContent = "center";
+    container.style.pointerEvents = "none";
+    container.style.zIndex = "20";
+
+    const text = document.createElement("div");
+    text.innerText = message;
+    text.style.fontFamily = '"JotiOne", "Comic Sans MS", sans-serif';
+    text.style.fontSize = "100px";
+    text.style.color = "#FFD700"; // 金色
+    text.style.textShadow = "4px 4px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 4px 4px 10px rgba(0,0,0,0.5)";
+    text.style.transform = "scale(0.5)";
+    text.style.opacity = "0";
+    text.style.transition = "transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s";
+
+    container.appendChild(text);
+    this.uiLayer.appendChild(container);
+
+    // 动画
+    requestAnimationFrame(() => {
+      text.style.transform = "scale(1)";
+      text.style.opacity = "1";
+    });
+
+    if (duration > 0) {
+      setTimeout(() => {
+        text.style.transform = "scale(1.5)";
+        text.style.opacity = "0";
+        setTimeout(() => {
+          if (container.parentNode) container.parentNode.removeChild(container);
+        }, 300);
+      }, duration);
+    }
+  }
+
+  public showDeathScreen(): void {
+    const deathDiv = document.createElement("div");
+    deathDiv.innerText = "WASTED";
+    deathDiv.style.position = "absolute";
+    deathDiv.style.top = "50%";
+    deathDiv.style.left = "50%";
+    deathDiv.style.transform = "translate(-50%, -50%) scale(0.5)";
+    deathDiv.style.color = "#ff3333";
+    deathDiv.style.fontFamily = '"Impact", "Arial Black", sans-serif';
+    deathDiv.style.fontSize = "120px";
+    deathDiv.style.fontWeight = "bold";
+    deathDiv.style.textShadow = "5px 5px 0px #000";
+    deathDiv.style.pointerEvents = "none";
+    deathDiv.style.opacity = "0";
+    deathDiv.style.transition = "transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s";
+    deathDiv.style.zIndex = "1000";
+    
+    this.uiLayer.appendChild(deathDiv);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      deathDiv.style.opacity = "1";
+      deathDiv.style.transform = "translate(-50%, -50%) scale(1)";
+    });
+
+    // Remove after 1.5s
     setTimeout(() => {
-      this.uiLayer.removeChild(msgDiv);
-    }, 3000);
+      deathDiv.style.opacity = "0";
+      setTimeout(() => {
+        if (deathDiv.parentNode) {
+          deathDiv.parentNode.removeChild(deathDiv);
+        }
+      }, 500);
+    }, 1000);
   }
 
   // ========== 3D UI 交互 ==========
@@ -191,14 +268,6 @@ export class UIManager {
     return mesh;
   }
 
-  private createPanel(width: number, height: number): THREE.Mesh {
-    const geom = new THREE.PlaneGeometry(width, height);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xf0e6d2 });
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.userData.type = "panel";
-    return mesh;
-  }
-
   private createTextSprite(text: string, color: string): THREE.Sprite {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d")!;
@@ -208,7 +277,7 @@ export class UIManager {
     context.fillStyle = "rgba(0, 0, 0, 0.5)";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
-    context.font = "bold 32px Arial";
+    context.font = "bold 32px JotiOne";
     context.fillStyle = color;
     context.textAlign = "center";
     context.textBaseline = "middle";
@@ -227,57 +296,113 @@ export class UIManager {
   ): void {
     this.uiLayer.innerHTML = "";
 
-    if (!this.scene || !this.camera || !this.uiRoot3D) {
-      const nickname = "Player" + Math.floor(Math.random() * 1000);
-      const hostId =
-        window.prompt("Enter Host ID to join (leave empty to host):", "") || "";
-      if (hostId) {
-        onJoin(nickname, hostId);
-      } else {
-        onHost(nickname);
-      }
-      return;
-    }
+    // 创建全屏背景容器
+    const container = document.createElement("div");
+    container.style.position = "absolute";
+    container.style.top = "0";
+    container.style.left = "0";
+    container.style.width = "100%";
+    container.style.height = "100%";
+    container.style.display = "flex";
+    container.style.flexDirection = "column";
+    container.style.alignItems = "center";
+    container.style.justifyContent = "center";
+    container.style.background = "linear-gradient(135deg, #f0e6d2 0%, #e8dcc8 100%)";
+    container.style.fontFamily = '"JotiOne", "Comic Sans MS", sans-serif';
+    this.uiLayer.appendChild(container);
 
-    this.uiRoot3D.clear();
-
-    const panel = this.createPanel(8, 4.5);
-    panel.position.set(0, 1.8, -10);
-    this.uiRoot3D.add(panel);
-
-    // Logo 图片替代标题文字
+    // Logo
     const logoImg = document.createElement("img");
     logoImg.src = import.meta.env.BASE_URL + "logo.png";
-    logoImg.className = "ui-title-logo";
-    logoImg.alt = "Ultimate Chicken Horse 3D";
-    this.uiLayer.appendChild(logoImg);
+    logoImg.style.maxWidth = "600px";
+    logoImg.style.width = "80%";
+    logoImg.style.marginBottom = "40px";
+    logoImg.style.animation = "logo-pop-in 1s cubic-bezier(0.34, 1.56, 0.64, 1)";
+    container.appendChild(logoImg);
 
+    // 昵称输入框
     let nickname = "Player" + Math.floor(Math.random() * 1000);
+    const nameInputContainer = document.createElement("div");
+    nameInputContainer.style.marginBottom = "30px";
+    nameInputContainer.style.display = "flex";
+    nameInputContainer.style.alignItems = "center";
+    nameInputContainer.style.gap = "10px";
+    
+    const nameLabel = document.createElement("span");
+    nameLabel.innerText = "Nickname:";
+    nameLabel.style.fontSize = "24px";
+    nameLabel.style.color = "#3b2b1a";
+    nameInputContainer.appendChild(nameLabel);
 
-    const nameHint = document.createElement("div");
-    nameHint.className = "ui-name-hint ui-element";
-    nameHint.innerText = `Nickname: ${nickname} (click to edit)`;
-    nameHint.onclick = () => {
-      const next = window.prompt("Enter your nickname", nickname) || nickname;
-      nickname = next.trim() || nickname;
-      nameHint.innerText = `Nickname: ${nickname} (click to edit)`;
+    const nameInput = document.createElement("input");
+    nameInput.value = nickname;
+    nameInput.className = "ui-element";
+    nameInput.style.padding = "10px 15px";
+    nameInput.style.fontSize = "20px";
+    nameInput.style.border = "3px solid #3b2b1a";
+    nameInput.style.borderRadius = "8px";
+    nameInput.style.backgroundColor = "#fff";
+    nameInput.style.fontFamily = "inherit";
+    nameInput.style.width = "200px";
+    nameInput.onchange = (e) => {
+      nickname = (e.target as HTMLInputElement).value.trim() || nickname;
     };
-    this.uiLayer.appendChild(nameHint);
+    nameInputContainer.appendChild(nameInput);
+    container.appendChild(nameInputContainer);
 
-    const hostBtn = this.createButtonPlane(2.4, 0.9, "HOST", () => {
-      onHost(nickname);
-    });
-    hostBtn.position.set(-2.4, 1.2, -9.9);
-    this.uiRoot3D.add(hostBtn);
+    // 按钮容器
+    const btnContainer = document.createElement("div");
+    btnContainer.style.display = "flex";
+    btnContainer.style.gap = "30px";
+    container.appendChild(btnContainer);
 
-    const joinBtn = this.createButtonPlane(2.4, 0.9, "JOIN", () => {
+    // HOST 按钮
+    const hostBtn = document.createElement("button");
+    hostBtn.innerText = "HOST GAME";
+    hostBtn.className = "ui-element";
+    this.styleButton(hostBtn, "#4CAF50");
+    hostBtn.onclick = () => onHost(nickname);
+    btnContainer.appendChild(hostBtn);
+
+    // JOIN 按钮
+    const joinBtn = document.createElement("button");
+    joinBtn.innerText = "JOIN GAME";
+    joinBtn.className = "ui-element";
+    this.styleButton(joinBtn, "#2196F3");
+    joinBtn.onclick = () => {
       const hostId = window.prompt("Enter Host ID:", "") || "";
       if (!hostId) return;
       onJoin(nickname, hostId);
-    });
-    joinBtn.position.set(2.4, 1.2, -9.9);
-    this.uiRoot3D.add(joinBtn);
+    };
+    btnContainer.appendChild(joinBtn);
   }
+
+  private styleButton(btn: HTMLButtonElement, color: string): void {
+    btn.style.padding = "15px 40px";
+    btn.style.fontSize = "24px";
+    btn.style.border = "none";
+    btn.style.borderRadius = "12px";
+    btn.style.backgroundColor = color;
+    btn.style.color = "white";
+    btn.style.cursor = "pointer";
+    btn.style.fontFamily = "inherit";
+    btn.style.boxShadow = "0 6px 0 rgba(0,0,0,0.2)";
+    btn.style.transition = "transform 0.1s, box-shadow 0.1s";
+    
+    btn.onmousedown = () => {
+      btn.style.transform = "translateY(4px)";
+      btn.style.boxShadow = "0 2px 0 rgba(0,0,0,0.2)";
+    };
+    btn.onmouseup = () => {
+      btn.style.transform = "translateY(0)";
+      btn.style.boxShadow = "0 6px 0 rgba(0,0,0,0.2)";
+    };
+    btn.onmouseleave = () => {
+      btn.style.transform = "translateY(0)";
+      btn.style.boxShadow = "0 6px 0 rgba(0,0,0,0.2)";
+    };
+  }
+
 
   // ========== 大厅界面 ==========
 
@@ -435,7 +560,7 @@ export class UIManager {
 
     // 开始按钮
     if (isHost) {
-      const startBtn = this.createButtonPlane(2.5, 0.9, "START", () => {
+      const startBtn = this.createButtonPlane(3.0, 1.0, "START GAME", () => {
         onStart();
       });
       startBtn.position.set(0, 4.5, -9.9);
@@ -444,6 +569,7 @@ export class UIManager {
       const waitDiv = document.createElement("div");
       waitDiv.className = "ui-wait-msg";
       waitDiv.innerText = "Waiting for host to start...";
+      waitDiv.style.fontFamily = '"JotiOne", "Comic Sans MS", sans-serif';
       this.uiLayer.appendChild(waitDiv);
     }
   }

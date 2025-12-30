@@ -244,40 +244,48 @@ export class PlaceholderGenerator {
     return group;
   }
 
-  // UI 木牌按钮，与 Party Box 木箱保持材质和风格统一
+  // UI 按钮，风格与 HOST/JOIN 按钮统一
   static createUIBoardButton(
     width: number,
     height: number,
     text: string
   ): THREE.Mesh {
     const canvas = document.createElement("canvas");
-    canvas.width = 256;
+    canvas.width = 512;
     canvas.height = 128;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      // 木纹背景
-      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      gradient.addColorStop(0, "#8B4513");
-      gradient.addColorStop(1, "#A0522D");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // 边框
-      ctx.strokeStyle = "#3b2b1a";
-      ctx.lineWidth = 8;
-      ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+      // 圆角矩形背景
+      const r = 20;
+      const w = canvas.width;
+      const h = canvas.height;
+      
+      ctx.fillStyle = "#4CAF50"; // Green
+      ctx.beginPath();
+      ctx.moveTo(r, 0);
+      ctx.lineTo(w - r, 0);
+      ctx.quadraticCurveTo(w, 0, w, r);
+      ctx.lineTo(w, h - r);
+      ctx.quadraticCurveTo(w, h, w - r, h);
+      ctx.lineTo(r, h);
+      ctx.quadraticCurveTo(0, h, 0, h - r);
+      ctx.lineTo(0, r);
+      ctx.quadraticCurveTo(0, 0, r, 0);
+      ctx.closePath();
+      ctx.fill();
 
       // 文本
-      ctx.fillStyle = "#f9f5e8";
-      ctx.font = 'bold 40px "Comic Sans MS", "Chalkboard SE", sans-serif';
+      ctx.fillStyle = "#ffffff";
+      ctx.font = '60px "JotiOne", "Comic Sans MS", sans-serif';
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+      ctx.fillText(text, w / 2, h / 2 + 5); // +5 for visual centering
     }
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.anisotropy = 4;
     texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearFilter;
 
     const geom = new THREE.PlaneGeometry(width, height);
     const mat = new THREE.MeshBasicMaterial({
