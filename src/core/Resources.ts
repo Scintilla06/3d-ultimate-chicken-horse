@@ -90,6 +90,18 @@ export class Resources {
         "raccoon",
         import.meta.env.BASE_URL + "models/characters/raccoon/raccoon.glb"
       );
+      this.loadModel(
+        "sheep",
+        import.meta.env.BASE_URL + "models/characters/sheep/sheep.glb"
+      );
+      this.loadModel(
+        "monkey",
+        import.meta.env.BASE_URL + "models/characters/monkey/monkey.glb"
+      );
+      this.loadModel(
+        "lizard",
+        import.meta.env.BASE_URL + "models/characters/lizard/lizard.glb"
+      );
 
       // Textures
       this.textures.set(

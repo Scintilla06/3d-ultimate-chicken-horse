@@ -42,6 +42,7 @@ export class Player extends Character {
   // Ice movement robustness: tolerate short grounded/tag flicker without breaking ice behavior
   private readonly MOVE_GROUNDED_GRACE: number = 0.12;
   private timeSinceLastGrounded: number = 999;
+  private timeSinceIce: number = 999; // Track how long since we were last on ice
   private lastGroundInfo: GroundInfo = {
     grounded: false,
     isIce: false,
@@ -304,6 +305,14 @@ export class Player extends Character {
     const groundInfo = this.getGroundInfo();
     const grounded = groundInfo.grounded;
 
+    // Recompute wall contact per-frame (collide event is not reliable as a persistent state)
+    // Moved up so it can be used in moveIsIce logic
+    const wallContact = this.computeWallContactFromContacts();
+    this.isAgainstWall = wallContact.againstWall;
+    if (wallContact.againstWall) {
+      this.wallContactNormal.copy(wallContact.normal);
+    }
+
     // Foot-probe: independent from grounded. Used to stabilize ice behavior and add diagnostics.
     const surfaceProbe = this.probeSurfaceBelow(2.0);
     const probeIsIce = !!surfaceProbe?.isIce;
@@ -318,12 +327,21 @@ export class Player extends Character {
       this.lastGroundInfo = groundInfo;
     }
 
+    // Track time since we were last on ice (either grounded on ice, or probing ice)
+    if (groundInfo.isIce || (probeIsIce && probeIsClose)) {
+      this.timeSinceIce = 0;
+    } else {
+      this.timeSinceIce += delta;
+    }
+
     const withinGrace = this.timeSinceLastGrounded < this.MOVE_GROUNDED_GRACE;
+    const withinIceGrace = this.timeSinceIce < this.MOVE_GROUNDED_GRACE;
 
     const moveIsIce =
       groundInfo.isIce ||
       (probeIsIce && probeIsClose) ||
-      (!grounded && withinGrace && this.lastGroundInfo.isIce);
+      (!grounded && withinGrace && this.lastGroundInfo.isIce) ||
+      (withinIceGrace); // Keep ice physics if we were recently on ice (even if now grounded on non-ice wall)
     const moveIsIceSlope =
       groundInfo.isIceSlope ||
       (probeIsIceSlope && probeIsClose) ||
@@ -359,13 +377,6 @@ export class Player extends Character {
             `sinceGrounded=${this.timeSinceLastGrounded.toFixed(2)}`
         );
       }
-    }
-
-    // Recompute wall contact per-frame (collide event is not reliable as a persistent state)
-    const wallContact = this.computeWallContactFromContacts();
-    this.isAgainstWall = wallContact.againstWall;
-    if (wallContact.againstWall) {
-      this.wallContactNormal.copy(wallContact.normal);
     }
 
     // --- Stuck Detection and Recovery ---
@@ -641,10 +652,12 @@ export class Player extends Character {
     const rayDownFromFeet = 1.2;
 
     // ---------- CONTACT-BASED CHECK (more reliable than raycast) ----------
-    let contactGrounded = false;
-    let contactSlopeAngle = 0;
-    let contactUserData: any = null;
-    let contactBody: CANNON.Body | null = null;
+    let bestGround: {
+      slopeAngle: number;
+      userData: any;
+      body: CANNON.Body | null;
+      isIce: boolean;
+    } | null = null;
 
     for (const c of this.body.world.contacts) {
       // Contact normals point from bi to bj. Determine direction relative to this body.
@@ -677,22 +690,32 @@ export class Player extends Character {
       const distanceToFeet = footY - contactPoint.y;
       if (distanceToFeet > 1.0 || distanceToFeet < -0.3) continue;
 
-      // Consider grounded
-      contactGrounded = true;
-      contactSlopeAngle = Math.acos(Math.min(1, Math.max(0, nY)));
-      contactUserData = other ? (other as any).userData : null;
-      contactBody = other;
-      break;
+      // Found a valid ground contact. Check if it's ice.
+      const userData = other ? (other as any).userData : null;
+      const tag = userData?.tag;
+      const isIce = tag === "ice" || tag === "ice_slope";
+      const slopeAngle = Math.acos(Math.min(1, Math.max(0, nY)));
+
+      // Prioritize ICE: If we haven't found ground yet, OR if this ground is ICE and the previous best was NOT ICE, take it.
+      // This prevents "rubbing against non-ice wall" from overriding the ice floor contact.
+      if (!bestGround || (isIce && !bestGround.isIce)) {
+        bestGround = {
+          slopeAngle,
+          userData,
+          body: other,
+          isIce
+        };
+      }
     }
 
-    if (contactGrounded) {
-      const canJumpContact = contactSlopeAngle < this.MAX_JUMPABLE_SLOPE_ANGLE;
-      const tag = contactUserData?.tag;
-      const isIce = tag === "ice" || tag === "ice_slope";
+    if (bestGround) {
+      const canJumpContact = bestGround.slopeAngle < this.MAX_JUMPABLE_SLOPE_ANGLE;
+      const tag = bestGround.userData?.tag;
+      const isIce = bestGround.isIce;
       const isIceSlope = tag === "ice_slope";
 
-      const groundVelocity = contactBody
-        ? { x: contactBody.velocity.x, z: contactBody.velocity.z }
+      const groundVelocity = bestGround.body
+        ? { x: bestGround.body.velocity.x, z: bestGround.body.velocity.z }
         : undefined;
 
       return {
@@ -700,11 +723,11 @@ export class Player extends Character {
         isIce,
         isIceSlope,
         canJump: canJumpContact,
-        slopeAngle: contactSlopeAngle,
-        groundBody: contactBody ?? undefined,
+        slopeAngle: bestGround.slopeAngle,
+        groundBody: bestGround.body || undefined,
         groundVelocity,
-        slideDirection: isIceSlope ? contactUserData.slideDirection : undefined,
-        tiltAngle: isIceSlope ? contactUserData.tiltAngle : undefined,
+        slideDirection: isIceSlope ? bestGround.userData.slideDirection : undefined,
+        tiltAngle: isIceSlope ? bestGround.userData.tiltAngle : undefined
       };
     }
 
