@@ -10,6 +10,7 @@ export class CameraController {
   public angleY: number = 0; // 水平角度 (Yaw)
   public angleX: number = 0.3; // 垂直角度 (Pitch)
   public distance: number = 6;
+  public isFirstPerson: boolean = false;
 
   // 建造模式相机参数
   public buildAngle: number = 0;
@@ -95,7 +96,15 @@ export class CameraController {
     this.angleX += deltaY * sensitivity;
 
     // 限制垂直角度
-    this.angleX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.angleX));
+    const limit = this.isFirstPerson ? Math.PI / 2 - 0.1 : Math.PI / 3;
+    this.angleX = Math.max(-limit, Math.min(limit, this.angleX));
+  }
+
+  /**
+   * 切换第一/第三人称视角
+   */
+  public toggleFirstPerson(): void {
+    this.isFirstPerson = !this.isFirstPerson;
   }
 
   /**
@@ -105,18 +114,37 @@ export class CameraController {
     const target = targetPosition.clone();
     target.y += 1.5; // 看向头部高度
 
-    const offsetX =
-      Math.sin(this.angleY) * Math.cos(this.angleX) * this.distance;
-    const offsetZ =
-      Math.cos(this.angleY) * Math.cos(this.angleX) * this.distance;
-    const offsetY = Math.sin(this.angleX) * this.distance;
+    if (this.isFirstPerson) {
+      // 第一人称视角
+      this.camera.position.copy(target);
+      
+      // 计算视线方向（与第三人称相机的看向方向一致）
+      // 第三人称相机位置是 target + offset，看向 target
+      // 所以视线方向是 target - (target + offset) = -offset
+      const lookDirX = -Math.sin(this.angleY) * Math.cos(this.angleX);
+      const lookDirZ = -Math.cos(this.angleY) * Math.cos(this.angleX);
+      const lookDirY = -Math.sin(this.angleX);
 
-    this.camera.position.set(
-      target.x + offsetX,
-      target.y + offsetY,
-      target.z + offsetZ
-    );
-    this.camera.lookAt(target);
+      this.camera.lookAt(
+        target.x + lookDirX,
+        target.y + lookDirY,
+        target.z + lookDirZ
+      );
+    } else {
+      // 第三人称视角
+      const offsetX =
+        Math.sin(this.angleY) * Math.cos(this.angleX) * this.distance;
+      const offsetZ =
+        Math.cos(this.angleY) * Math.cos(this.angleX) * this.distance;
+      const offsetY = Math.sin(this.angleX) * this.distance;
+
+      this.camera.position.set(
+        target.x + offsetX,
+        target.y + offsetY,
+        target.z + offsetZ
+      );
+      this.camera.lookAt(target);
+    }
   }
 
   /**

@@ -376,8 +376,14 @@ export class Player extends Character {
     const withinGrace = this.timeSinceLastGrounded < this.MOVE_GROUNDED_GRACE;
     const withinIceGrace = this.timeSinceIce < this.MOVE_GROUNDED_GRACE;
 
+    // Check for external forces (like Black Hole)
+    const externalForceActive = (this.body as any).userData.externalForceActive === true;
+    // Reset the flag for the next frame (it will be set again if the force is still active)
+    (this.body as any).userData.externalForceActive = false;
+
     const moveIsIce =
       groundInfo.isIce ||
+      externalForceActive ||
       (probeIsIce && probeIsClose) ||
       (!grounded && withinGrace && this.lastGroundInfo.isIce) ||
       (withinIceGrace); // Keep ice physics if we were recently on ice (even if now grounded on non-ice wall)

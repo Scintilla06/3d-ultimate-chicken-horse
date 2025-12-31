@@ -229,10 +229,60 @@ export class LevelManager {
    * 创建 Party Box 区域
    */
   private createPartyBoxArea(): void {
-    const boxPos = new THREE.Vector3(12, 0, -6);
-    const openBox = PlaceholderGenerator.createOpenBox();
-    openBox.position.copy(boxPos);
-    this.partyBoxRoot.add(openBox);
+    // 移到远处，避免看到地图
+    const boxPos = new THREE.Vector3(1000, 0, 0);
+    
+    // 创建一个圆形平台作为选择道具的背景
+    // 改为更柔和的颜色和材质，更加简洁清新
+    const geometry = new THREE.CylinderGeometry(15, 15, 0.5, 64);
+    const material = new THREE.MeshStandardMaterial({ 
+      color: 0xf8f9fa, // 极浅的灰白色
+      roughness: 0.3,
+      metalness: 0.1
+    });
+    const platform = new THREE.Mesh(geometry, material);
+    platform.position.copy(boxPos);
+    platform.position.y = -0.25; // 顶面在 y=0
+    platform.receiveShadow = true;
+    this.partyBoxRoot.add(platform);
+
+    // 添加一个发光的外环
+    const ringGeo = new THREE.TorusGeometry(14.8, 0.15, 16, 100);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x4ecdc4 }); // 清新的青色
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.copy(boxPos);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.05;
+    this.partyBoxRoot.add(ring);
+
+    // 添加一些漂浮的装饰几何体
+    const floatGeo = new THREE.IcosahedronGeometry(0.4);
+    const floatMat = new THREE.MeshStandardMaterial({ 
+        color: 0x4ecdc4,
+        roughness: 0.5,
+        emissive: 0x1a5c58,
+        emissiveIntensity: 0.2
+    });
+    
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      const floatObj = new THREE.Mesh(floatGeo, floatMat);
+      
+      // 随机分布在周围
+      const r = 13 + Math.random() * 3;
+      const h = 1 + Math.random() * 5;
+      
+      floatObj.position.set(
+        boxPos.x + Math.cos(angle) * r,
+        h,
+        boxPos.z + Math.sin(angle) * r
+      );
+      
+      floatObj.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+      floatObj.castShadow = true;
+      
+      this.partyBoxRoot.add(floatObj);
+    }
   }
 
   /**

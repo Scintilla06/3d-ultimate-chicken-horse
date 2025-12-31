@@ -296,6 +296,15 @@ export class Game {
     });
 
     window.addEventListener("keydown", (event) => {
+      // 如果聊天输入框打开，不处理游戏快捷键（除了 Escape 可能需要特殊处理，但这里先简单处理）
+      if (this.uiManager.isChatInputOpen()) return;
+
+      if (event.key === "v" || event.key === "V") {
+        if (this.state === GameState.RUN) {
+          this.cameraController.toggleFirstPerson();
+        }
+      }
+
       if (event.key === "Escape") {
         if (this.state === GameState.BUILD_PLACE) {
           this.setState(GameState.BUILD_VIEW);
@@ -1134,12 +1143,14 @@ export class Game {
     this.buildSystem.selectedItem = null;
     this.buildSystem.rotation = 0;
 
-    // 相机平移动画
+    // 相机移动到新的选择平台位置 (1000, 0, 0)
     this.cameraController.cancelTween();
-    this.cameraController.setPosition(0, 4, 4);
-    this.cameraController.lookAt(0, 4, -10);
-    this.cameraController.tweenTo(new THREE.Vector3(11, 4, 4), 1.0);
-    this.cameraController.lookAt(0, 4, -10);
+    // 先设置一个初始位置
+    this.cameraController.setPosition(1000, 15, 15);
+    this.cameraController.lookAt(1000, 0, 0);
+    // 缓慢移动到更近的视角
+    this.cameraController.tweenTo(new THREE.Vector3(1000, 10, 10), 1.0);
+    this.cameraController.lookAt(1000, 0, 0);
 
     if (this.networkManager.isHostUser()) {
       this.generatePartyBoxItems();
@@ -1409,12 +1420,17 @@ export class Game {
 
   private updateCountdown(): void {
     this.countdownTimer -= 1 / 60;
-    if (this.countdownTimer <= 0) {
+    
+    // 倒计时结束后显示 GO! 并停留一小段时间
+    if (this.countdownTimer <= -0.8) {
       this.setState(GameState.RUN);
     } else {
-      this.uiManager.showMessage(
-        `Get Ready! ${Math.ceil(this.countdownTimer)}`
-      );
+      const timeLeft = Math.ceil(this.countdownTimer);
+      if (timeLeft > 0) {
+        this.uiManager.showMessage(`Get Ready! ${timeLeft}`);
+      } else {
+        this.uiManager.showMessage("GO!");
+      }
 
       const localPlayer = this.players.get("local");
       if (localPlayer) {
@@ -1470,7 +1486,7 @@ export class Game {
       if (!this.playersFinishedTurn.has(this.networkManager.getMyId())) {
         if (localPlayer.checkDeath() || localPlayer.hasWon) {
           if (localPlayer.hasWon) {
-            this.playersFinishedTurn.add(this.networkManager.getMyId());
+            // 胜利逻辑：显示 GOAL，延迟切换视角
             this.uiManager.showMessage("GOAL!");
           } else {
             // 死亡逻辑
@@ -1519,11 +1535,16 @@ export class Game {
             }
           }
 
-          const delay = localPlayer.hasWon ? 0 : 2000;
+          // 胜利延迟 1s，死亡延迟 2s (死亡有1s的重生等待)
+          const delay = localPlayer.hasWon ? 1000 : 2000;
           setTimeout(() => {
+            if (localPlayer.hasWon) {
+              this.playersFinishedTurn.add(this.networkManager.getMyId());
+            }
+
             document.exitPointerLock();
             
-            // 死亡后切换到出生区域上方观看，而不是直接进入自由观战模式
+            // 切换到出生区域上方观看
             // 出生区域位于 (0, 0, 0) 附近
             this.cameraController.setPosition(0, 12, -8);
             this.cameraController.lookAt(0, 0, 12);

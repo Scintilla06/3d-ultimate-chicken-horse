@@ -71,6 +71,9 @@ export class BlackHole {
           ),
           playerBody.position
         );
+
+        // 标记玩家受到外部强力影响，使其进入"滑行"模式（类似冰面），从而让力能生效
+        (playerBody as any).userData.externalForceActive = true;
       }
     }
   }

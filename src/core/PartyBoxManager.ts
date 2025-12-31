@@ -38,38 +38,50 @@ export class PartyBoxManager {
   public generateItems(playerCount: number): PartyBoxItemData[] {
     const numItems = playerCount + 2;
     const selectedItems: PartyBoxItemData[] = [];
-    const boxPos = new THREE.Vector3(12, 0, -6);
+    // 对应 LevelManager 中的新位置
+    const boxPos = new THREE.Vector3(1000, 0, 0);
 
     this.currentRound++;
+
+    // 物品布局参数
+    const radius = 6; // 放置半径
+    const angleStep = (Math.PI * 2) / numItems;
 
     // 第一轮保证至少有一个木块
     let guaranteedBlock = false;
     if (this.currentRound === 1) {
-      const xOffset = (Math.random() - 0.5) * 10;
-      const zOffset = (Math.random() - 0.5) * 6;
-      const yRot = Math.random() * Math.PI * 2;
+      const angle = 0;
       selectedItems.push({
         id: "wood_block_321",
-        pos: [boxPos.x + xOffset, boxPos.y + 0.5, boxPos.z + zOffset],
-        rot: yRot,
+        pos: [
+          boxPos.x + Math.cos(angle) * radius, 
+          boxPos.y + 0.5, 
+          boxPos.z + Math.sin(angle) * radius
+        ],
+        rot: -angle + Math.PI, // 面向中心
       });
       guaranteedBlock = true;
     }
 
     const remainingItems = guaranteedBlock ? numItems - 1 : numItems;
+    const startIdx = guaranteedBlock ? 1 : 0;
+
     for (let i = 0; i < remainingItems; i++) {
       const id =
         PartyBoxManager.ALL_ITEMS[
           Math.floor(Math.random() * PartyBoxManager.ALL_ITEMS.length)
         ];
-      const xOffset = (Math.random() - 0.5) * 10;
-      const zOffset = (Math.random() - 0.5) * 6;
-      const yRot = Math.random() * Math.PI * 2;
-
+      
+      const angle = (startIdx + i) * angleStep;
+      
       selectedItems.push({
         id: id,
-        pos: [boxPos.x + xOffset, boxPos.y + 0.5, boxPos.z + zOffset],
-        rot: yRot,
+        pos: [
+          boxPos.x + Math.cos(angle) * radius, 
+          boxPos.y + 0.5, 
+          boxPos.z + Math.sin(angle) * radius
+        ],
+        rot: -angle + Math.PI, // 面向中心
       });
     }
 
